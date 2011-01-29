@@ -11,3 +11,5 @@ The PFAC algorithm efficiently exploits the parallelism of the *Aho-Corasick* al
 
 
 [1]Cheng-Hung Lin, Sheng-Yu Tsai, Chen-Hsiung Liu, Shih-Chieh Chang, and Jyuo-Min Shyu, "*Accelerating String Matching Using Multi-threaded Algorithm on GPU*,"  in _Proc. IEEE GLOBAL COMMUNICATIONS CONFERENCE (IEEE GLOBECOM 2010)_, Miami, Florida, USA, December 6-10, 2010.
+
+= People =
