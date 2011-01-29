@@ -3,7 +3,7 @@ PFAC is an open source, high-performance string matching library supporting NVID
 
 = Introduction =
 
-The *PFAC* library is based on the _Parallel Failureless-AC_ Algorithm[1] proposed at the IEEE GLOBECOM 2010. 
+*PFAC* library is based on the _Parallel Failureless-AC_ Algorithm[1] proposed at the IEEE GLOBECOM 2010. 
 
 
 = Details =
