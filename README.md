@@ -244,4 +244,5 @@ Refer to the user guide page for further information and examples.
 2. Cheng-Hung Lin, Sheng-Yu Tsai, Chen-Hsiung Liu, Shih-Chieh Chang, and Jyuo-Min Shyu, "Accelerating String Matching Using Multi-threaded Algorithm on GPU,"  in Proc. of IEEE GLOBAL COMMUNICATIONS CONFERENCE (*GLOBECOM*), Miami, Florida, USA, December 6-10, pp.1-5, 2010.
 
 # Contributors
-The primary developers of PFAC are *Lung-Sheng Chien*, *Chen-Hsiung Liu*, *Cheng-Hung Lin*, and *Shih-Chieh Chang*. 
+The primary developers of PFAC are *Lung-Sheng Chien*, *Chen-Hsiung Liu*, *Cheng-Hung Lin*, and *Shih-Chieh Chang*.
+Website maintainer *Chun-Cheng Huang*
