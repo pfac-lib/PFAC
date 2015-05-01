@@ -25,7 +25,7 @@
 #include <assert.h>
 #include <cuda_runtime.h>
 
-#include "../include/PFAC.h"
+#include <PFAC.h>
         
 int main(int argc, char **argv)
 {

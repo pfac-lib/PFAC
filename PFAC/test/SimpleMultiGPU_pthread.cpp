@@ -33,7 +33,7 @@
 #include <pthread.h>
 #include <cuda_runtime.h>
 
-#include "../include/PFAC.h"
+#include <PFAC.h>
 
 #define  FILENAME_MAXLEN   256
 #define  NUM_THREADS       2

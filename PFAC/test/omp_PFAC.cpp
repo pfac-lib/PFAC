@@ -43,7 +43,7 @@
 
 using namespace std ;
 
-#include "../include/PFAC.h"
+#include <PFAC.h>
 
 #define FILENAME_MAXLEN     256
 

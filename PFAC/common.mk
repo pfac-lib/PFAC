@@ -20,6 +20,8 @@
 #   note that we use machine type {x86_64 or i386} to choose either -m64 or -m32.
 #
 
+PFAC_LIB_ROOT := $(PWD)
+
 CFLAGS        = -O2 -D_REENTRANT -Wall
 CXXFLAGS      = -O2 -D_REENTRANT -Wall
 
@@ -47,7 +49,19 @@ NVCC := $(if $(filter $(machine),x86_64),nvcc -m64,nvcc -m32)
 # variable 'cuda_32' is used to detect if sm21 can be compiled or not
 # it is used in src/Makefile
 # 
-cuda_32 := $(if $(shell nvcc -V | grep 3.2),1,)
+# CUDA 4.0
+#   Cuda compilation tools, release 4.0, V0.2.1221  
+#
+#cuda_32 := $(if $(shell nvcc -V | grep 3.2),1,)
+#cuda_40 := $(if $(shell nvcc -V | grep 4.0),1,)
+#sm_21_support := $(if $(filter 1, $(cuda_32) $(cuda_40)),1,)
+
+words := $(shell nvcc -V | grep tools)
+nvcc_v_comma := $(filter-out Cuda compilation tools% release V%, $(words))
+comma := ,
+nvcc_version := $(subst $(comma),,$(nvcc_v_comma))
+sm_21_support := $(if $(filter $(nvcc_version), 3.2 4.0),1,)
+
 
 #
 # default CUDA library path is /usr/local/cuda
@@ -58,3 +72,7 @@ cuda_32 := $(if $(shell nvcc -V | grep 3.2),1,)
 LIBS          = -L$(cudalib_path) -lcudart -ldl -lpthread
 INCPATH       = -I$(cudainc_path)
 
+#
+# add PFAC include directory
+#
+INCPATH += -I$(PFAC_LIB_ROOT)/include

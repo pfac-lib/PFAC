@@ -63,6 +63,7 @@ int  pattern_cmp( const char**s, const char **t )
     }
 }
 
+/*
 void printStringEndNewLine( char *s, FILE* fp )
 {
     if ( '\n' == *s ) { return ; }
@@ -75,6 +76,21 @@ void printStringEndNewLine( char *s, FILE* fp )
         }else{
             fprintf(fp,"%2.2x", ch );
         }
+    }
+    fprintf(fp,"%c", '\"');
+}
+*/
+
+void printString( char *s, const int n, FILE* fp )
+{
+    fprintf(fp,"%c", '\"');
+    for( int i = 0 ; i < n ; i++){
+        int ch = (unsigned char) s[i] ;
+        if ( (32 <= ch) && (126 >= ch) ){
+            fprintf(fp,"%c", ch );
+        }else{
+            fprintf(fp,"%2.2x", ch );
+        }        
     }
     fprintf(fp,"%c", '\"');
 }
@@ -219,40 +235,51 @@ PFAC_status_t parsePatternFile( char *patternfilename,
 }
 
 
+int lookup(vector< vector<TableEle> > &table, const int state, const int ch )
+{
+    if (state >= table.size() ) { return TRAP_STATE ;}
+    for(int j = 0 ; j < table[state].size() ; j++){
+        TableEle ele = table[state][j];
+        if ( ch == ele.ch ){
+            return ele.nextState ;	
+        }	
+    }
+    return TRAP_STATE ;
+}
+
 /*
  *  Given k = pattern_number patterns in rowPtr[0:k-1] with lexicographic order and
  *  patternLen_table[1:k], patternID_table[0:k-1]
  *
  *  user specified a initial state "initial_state",
  *  construct
- *  (1) PFAC_table: DFA of PFAC with k final states labeled from 0:k-1
- *  (2) output_table[0:k-1]:  output_table[j] contains pattern number corresponding to
- *      final state j
+ *  (1) PFAC_table: DFA of PFAC with k final states labeled from 1:k
  *
- *  WARNING: initial_state >= k, and size(output_table) >= k
+ *  WARNING: initial_state = k+1
  */
-PFAC_status_t create_PFACTable_reorder(const char** rowPtr, const int *patternLen_table, const int *patternID_table,
+PFAC_status_t create_PFACTable_spaceDriven(const char** rowPtr, const int *patternLen_table, const int *patternID_table,
     const int max_state_num,
-    const int pattern_num, const int initial_state,
+    const int pattern_num, const int initial_state, const int baseOfUsableStateID, 
     int *state_num_ptr,
-    int *PFAC_table )
+    vector< vector<TableEle> > &PFAC_table )
 {
     int state ;
     int state_num ;
 
-    // initialize PFAC table
-    for (int i = 0; i < max_state_num; i++) {
-        for (int j = 0; j < CHAR_SET; j++) {
-            PFAC_table[ PFAC_TABLE_MAP( i , j ) ] = TRAP_STATE ;
-        }
+    PFAC_table.clear();
+    PFAC_table.reserve( max_state_num );
+    vector< TableEle > empty_row ;
+    for(int i = 0 ; i < max_state_num ; i++){   
+        PFAC_table.push_back( empty_row );
     }
-
+    
 #ifdef DEBUG_MSG
     printf("initial state : %d\n", initial_state);
 #endif
 
     state = initial_state; // state is current state
-    state_num = initial_state + 1; // state_num: usable state
+    //state_num = initial_state + 1; // state_num: usable state
+    state_num = baseOfUsableStateID ;
 
     for ( int p_idx = 0 ; p_idx < pattern_num ; p_idx++ ) {
         char *pos = (char*) rowPtr[p_idx] ;
@@ -270,26 +297,32 @@ PFAC_status_t create_PFACTable_reorder(const char** rowPtr, const int *patternLe
             assert( '\n' != ch ) ;
 
             if ( (len-1) == offset ) { // finish reading a pattern
-
-                PFAC_table[ PFAC_TABLE_MAP(state,ch) ] = patternID;
-
+                TableEle ele ;
+                ele.ch = ch ;
+                ele.nextState = patternID ; // patternID is id of final state
+                PFAC_table[state].push_back(ele); //PFAC_table[ PFAC_TABLE_MAP(state,ch) ] = patternID; 
                 state = initial_state;
             }
             else {
-                if (TRAP_STATE == PFAC_table[PFAC_TABLE_MAP(state,ch)] ) {
-                    PFAC_table[PFAC_TABLE_MAP(state,ch)] = state_num;
+                int nextState = lookup(PFAC_table, state, ch );
+                if (TRAP_STATE == nextState ) {
+                    TableEle ele ;
+                    ele.ch = ch ;
+                    ele.nextState = state_num ;
+                    PFAC_table[state].push_back(ele); // PFAC_table[PFAC_TABLE_MAP(state,ch)] = state_num;
                     state = state_num; // go to next state
                     state_num = state_num + 1; // next available state
                 }
                 else {
                     // match prefix of previous pattern
-                    state = PFAC_table[PFAC_TABLE_MAP(state,ch)]; // go to next state
+                    // state = PFAC_table[PFAC_TABLE_MAP(state,ch)]; // go to next state
+                    state = nextState ;
                 }
             }
 
             if (state_num > max_state_num) {
 #ifdef DEBUG_MSG
-                fprintf(stderr,"Error: State number overflow, state no=%d, max_state_num=%d\n",
+                printf("Error: State number overflow, state no=%d, max_state_num=%d\n",
                     state_num, max_state_num );
 #endif
                 return PFAC_STATUS_INTERNAL_ERROR ;
@@ -304,6 +337,8 @@ PFAC_status_t create_PFACTable_reorder(const char** rowPtr, const int *patternLe
 
     return PFAC_STATUS_SUCCESS ;
 }
+
+
 
 
 int dump_reorderPattern(char** rowPtr, int *patternID_table, int *patternLen_table,
@@ -333,7 +368,8 @@ int dump_reorderPattern(char** rowPtr, int *patternID_table, int *patternLen_tab
         int patternID = patternID_table[fs] ;
         int len = patternLen_table[patternID] ;
         fprintf(fp, "%6d :", patternID);
-        printStringEndNewLine( pos, fp ) ;
+        //printStringEndNewLine( pos, fp ) ;
+        printString( pos, len, fp );
         fprintf(fp,"\n");
     }
 
@@ -350,7 +386,8 @@ int dump_reorderPattern(char** rowPtr, int *patternID_table, int *patternLen_tab
         int patternID = i+1 ;
         int len = patternLen_table[patternID] ;
         fprintf(fp, "%5d, %5d :", patternID, len );
-        printStringEndNewLine( pos, fp ) ;
+        //printStringEndNewLine( pos, fp ) ;
+        printString( pos, len, fp );
         fprintf(fp,"\n");
     }
 

@@ -14,6 +14,16 @@
  *  limitations under the License.
  */
 
+/*
+ *  two methods can achieve global synchronizations in kernel PFAC_reduce_inplace_kernel
+ *  method 1: atomic operation
+ *      refer to http://forums.nvidia.com/index.php?showtopic=98444&pid=548609&start=&st=#entry548609
+ *  method 2: volatile declaration
+ *      this would avoid L1-cache incoherence because memory load directly comes from L2-cache
+ *      LD.E.CV appears in assembly code.
+ *      .cv cache as volatile (consider cached system memory lines stale, fetch again)
+ *
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,29 +32,11 @@
 #include <assert.h>
 #include <ctype.h>
 
+#include "thrust/device_vector.h"
+#include "thrust/scan.h"
 #include "../include/PFAC_P.h"
 
 //#define DEBUG_MSG
-
-/*
- *  we have two versions of global synchronizations in kernel PFAC_reduce_inplace_kernel
- *
- *  1) global memory access + sleep function
- *     however it incurs spinlock at random, we set a timeout to detect this phenomenon, 
- *     if spinlock occurs, then kernel return PFAC_STATUS_INTERNAL_ERROR.
- *
- *     SPINLOCK_CHECK will generate this code
- *
- *     we keep this code because it is interesting in spinlock. Assembly code is confirmed that
- *     comoiler nvcc does not do something strange, but at runtime, spinlock occurs.
- *
- *  2) atomic operation, refer to http://forums.nvidia.com/index.php?showtopic=98444&pid=548609&start=&st=#entry548609
- *     so far, it does not hang the app. So it should be good enough.
- *
- *     default setting is 2)
- *
- */
-//#define  SPINLOCK_CHECK 
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,16 +47,32 @@ extern "C" {
 }
 #endif // __cplusplus
 
+
 #define  BLOCK_EXP             (7)
 #define  BLOCK_SIZE            (1 << BLOCK_EXP)
+#define  EXTRA_SIZE_PER_TB     (128)
 #define  NUM_INTS_PER_THREAD   (2)
 
+#define  BLOCK_SIZE_DIV_256    (2)
 
-__host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle, 
+#define  NUM_WARPS_PER_BLOCK   (4)
+
+#if  256 != (BLOCK_SIZE_DIV_256 * BLOCK_SIZE) 
+    #error 256 != BLOCK_SIZE_DIV_256 * BLOCK_SIZE 
+#endif 
+
+#if  BLOCK_SIZE != 32 * NUM_WARPS_PER_BLOCK
+    #error BLOCK_SIZE != 32 * NUM_WARPS_PER_BLOCK
+#endif
+
+
+
+__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle, 
     int *d_input_string, int input_size,
     int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
     int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched );
-
+    
+    
 __global__  void  set_semaphore( int *d_w, int num_ones, int size );
 
 
@@ -134,6 +142,11 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
 __host__  PFAC_status_t PFAC_reduce_inplace_kernel( PFAC_handle_t handle, int *d_input_string, int input_size,
     int *d_match_result, int *d_pos, int *h_num_matched, int *h_matched_result, int *h_pos )
 {
+
+#ifdef DEBUG_MSG
+    printf("call PFAC_reduce_inplace_kernel \n");
+#endif
+
     int *d_nnz_per_block = NULL ; // working space, d_nnz_per_block[j] = nnz of block j
     int *d_w = NULL ; // working space, d_w = {d_atomicBlockID, d_semaphore, d_spinlock }
     cudaError_t cuda_status ;
@@ -187,7 +200,7 @@ __host__  PFAC_status_t PFAC_reduce_inplace_kernel( PFAC_handle_t handle, int *d
      *      h_num_matched = d_nnz_per_block[B-1]
      */
 
-    PFAC_status = PFAC_reduce_kernel_stage1( handle, d_input_string, input_size,
+    PFAC_status = PFAC_reduce_space_driven_stage1( handle, d_input_string, input_size,
         n_hat, num_blocks, dimBlock, dimGrid,
         d_match_result, d_pos, d_nnz_per_block, h_num_matched );
      
@@ -249,10 +262,6 @@ __host__  PFAC_status_t PFAC_reduce_inplace_kernel( PFAC_handle_t handle, int *d
      *  suppose B = num_blocks, then 
      *      d_w[0:B+1] = { d_atomicBlockID, d_semaphore[0,B), d_spinlock }
      *  
-     *  if macro SPINLOCK_CHECK is set, then zip_inplace_kernel is compiled by
-     *  a another version which may incur spinlock at random.
-     *  if spinlock occurs, then d_spinlock = last block ID which has spinlock.
-     * 
      *  NOTE: since block 0 has nothing to do, so d_spinlock = 0 means no spinlock occurs
      *
      *  after stage 3, d_nnz_per_block is useless
@@ -271,25 +280,7 @@ __host__  PFAC_status_t PFAC_reduce_inplace_kernel( PFAC_handle_t handle, int *d
         cudaFree(d_nnz_per_block); 
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
-    
-#ifdef SPINLOCK_CHECK    
-    // check if spinlock occurs
-    int h_spinlock ;
-    cuda_status = cudaMemcpy( &h_spinlock, d_spinlock, sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaSuccess != cuda_status) {
-#ifdef DEBUG_MSG     
-        printf("Error: h_spinlock,  %s\n", cudaGetErrorString(cuda_status));
-#endif        
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
-    if ( 0 !=  h_spinlock ){
-#ifdef DEBUG_MSG 
-        printf("Error: spinlock occurs at block ID %d \n", h_spinlock );
-#endif        
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
-#endif    
-   
+
     cudaFree(d_w); 
     cudaFree(d_nnz_per_block);    
     
@@ -336,53 +327,6 @@ __global__  void  set_semaphore( int *d_w, int num_ones, int size )
     }
 }
 
-
-/*
- *  spinlock occurs when global synchronization happens.
- *
- *  in our app, this may occur when there are more than one thread blocks in a SM.
- *  (in fact, atomic operation should be the right way to avoid spinlock)
- *
- *  suppose block b100 needs to wait for block b31, 
- *  i.e
- *    if b31 completes reading, then b100 can continue writing data to (d_matched_result, d_pos)
- *
- *  b100 and b31 may be in different SMs. 
- *
- *  suppose there are 8 blocks per SM and each block process 1024 elements, 
- *  i.e. read 1024 (matched,pos) pair.
- *
- *  Question: how many clocks should b100 wait at most if no spinlock occurs ?
- *
- *  one SM processes 1024 x 8 = 2K (matched, pos) pair in coalesced access.
- *  so 2K x 2 / 16 = 256 memory transactions.
- *
- *  assume 256 memory transactions are in the pipeline, then
- *  256 cycles are enough to issue 256 LOAD instructions.
- *
- *  However memory bandwidth is much smaller than performance of ALU.
- * 
- *  bandwidth ~ 100GB/s ~ 25 G LOAD / s
- *  ALU: 515 G instruction/s  on C2050
- *
- *  so perf. of bandwidth is 1/20th of perf. of ALU.
- *
- *  so latency of 256 memory transactions is
- *    500 (lastency of first read) + 256 * 20 < 5K cycles.
- *
- *  There are 14 SMs in Fermi and 30 SMs in Tesla C1060.
- *
- *  maximum time waiting for all thread blocks is 30 * 5K cycles
- *
- *  This is upper bound, so we choose TIMEOUT_BOUND > 150*K.
- *
- *  NOTE: TIMEOUT_BOUND is only used when  macro SPINLOCK_CHECK is set 
- *
- */ 
- 
-#define  TIMEOUT_BOUND   (1 << 20)
-
-
 /*
  *  requirement:
  *      initial value of d_atomicBlockID is 1  (must be set by caller)
@@ -392,16 +336,13 @@ __global__  void  set_semaphore( int *d_w, int num_ones, int size )
  *      if a threads block has gbid k, then for all block j , j < k has 
  *      been processed by some thread blocks.
  *       
- *
  *  Resource usage:
  *
  *  sm20:
- *      SPINLOCK_CHECK is on : 28 regs, 16 bytes smem  => 1024 threads per SM
- *      SPINLOCK_CHECK is off: 29 regs, 4  bytes smem  => 1024 threads per SM
+ *      29 regs, 4  bytes smem  => 1024 threads per SM
  *  sm13, sm12, sm11:
- *      SPINLOCK_CHECK is on : 28 regs, 64+16 bytes smem => 512 threads per SM
- *      SPINLOCK_CHECK is off: 29 regs, 56+16 bytes smem => 512 threads per SM 
- *  
+ *      29 regs, 56+16 bytes smem => 512 threads per SM 
+ * 
  */
  
 __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result, 
@@ -459,20 +400,12 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
         // nothing to read, unlock semaphore 
         if ( 0 == tid ) {
             d_semaphore[gbid] = 1 ; // crucial, if not set, then hangs
+                                    // store directly goes to L2-cache, please see PTX document
             //atomicExch( d_semaphore + gbid, 1) ;            
         }                   
         return ;  
     }
     // now, nnz >= 1 or say end >= (start + 1)
-    
-#ifdef SPINLOCK_CHECK 
-    volatile __shared__ int w_smem[2] ;
-    if ( 0 == tid ){
-        w_smem[0] = w_start ;
-        w_smem[1] = w_end ;
-    }
-#endif
-     
 
     /*
      * step 2: read pair (match, pos) in the block
@@ -494,7 +427,7 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
      * step 3: unlock semaphore after reading
      */
     if ( 0 == tid ) {    
-        d_semaphore[gbid] = 1 ;
+        d_semaphore[gbid] = 1 ; // store directly goes to L2-cache, please see PTX document
         //atomicExch( &d_semaphore[gbid], 1) ;                   
     }
     
@@ -518,36 +451,6 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
      *     gbid = w_start if for all block j < gbid, block j has 1024 matched.
      *
      */
-
-#ifdef SPINLOCK_CHECK 
-
-    // this version will incur spinlock, I think that this is problem of cache coherence.
-    // how fast that data in L1 cache will be refreshed.
-    int timeout = 4 ; 
-    if ( 0 == tid ){ 
-        while(1){
-            // sleeping function to avoid spinlock
-            int guard = 1 ;
-            for(int j = 0 ; j < timeout ; j++ ){
-                guard = guard ^ j ;  
-            }
-            guard = (guard & 1) + 1 ;
-            timeout += guard * timeout ; 
-             
-            if ( TIMEOUT_BOUND < timeout ){
-                *d_spinlock = gbid ; // spinlock occurs, matched result may be wrong           
-                break ;
-            }
-            volatile int s1 = d_semaphore[ w_smem[0] ] ;
-            volatile int s2 = d_semaphore[ w_smem[1] ] ;    
-            if ( 2 == (s1+s2) ){ 
-                break ;
-            }
-        }// while     
-    }
-     __syncthreads(); // necessary for global sync
-
-#else
 
    /*
     *   refer to http://forums.nvidia.com/index.php?showtopic=98444&pid=548609&start=&st=#entry548609
@@ -579,6 +482,20 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
     *   [/code]
     *   
     *   then deadlock occurs.
+    *
+    *   use volatile:
+    *  [code]
+    *  volatile int *w_start_ptr =  d_semaphore+w_start ;
+    *  volatile int *w_end_ptr = d_semaphore+w_end ;
+    *  if ( 0 == tid ){
+    *    while(1){
+    *     if ( 2 == (*w_start_ptr + *w_end_ptr) ){
+    *         break ;
+    *      }
+    *    }
+    *  }
+    *  __syncthreads(); 
+    *  [/code]
     * 
     */
     if ( 0 == tid ){
@@ -589,9 +506,6 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
         while(0 == atomicCAS(d_semaphore+w_end, 2, 3));
     }
     __syncthreads(); // necessary for global sync
-
-#endif
-
 
     /*
      * step 5: write data back because of no race condition now
@@ -607,170 +521,686 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
     
 }
     
+// ------------------- space-driven version of stage 1
+
+
+texture < int2, 1, cudaReadModeElementType > tex_hashRowPtr_reduce ;
+texture < int2, 1, cudaReadModeElementType > tex_hashValPtr_reduce ;
+texture < int , 1, cudaReadModeElementType > tex_tableOfInitialState_reduce ;
+
+static __inline__  __device__ int tex_lookup(int state, int inputChar, const int hash_m, const int hash_p )
+{ 
+    int2 rowEle = tex1Dfetch(tex_hashRowPtr_reduce, state); // hashRowPtr[state]
+    int offset  = rowEle.x ;
+    int nextState = TRAP_STATE ;
+    if ( 0 <= offset ){ 
+       int k_sminus1 = rowEle.y ;
+       int sminus1 = k_sminus1 & HASH_KEY_S_MASK ;
+       int k = k_sminus1 >> HASH_KEY_K_MASKBITS ; 
+       int x = k * inputChar ;
+       int alpha_hat = x >> hash_m ;
+       int beta = x - hash_p * alpha_hat ;
+       if ( 0 > beta ){ // alpha_hat = (x/p)+1
+            beta += hash_p ;
+       }
+       int pos = beta & sminus1 ;
+       int2 valEle = tex1Dfetch(tex_hashValPtr_reduce, offset + pos); // hashValPtr[offset + pos];
+       if ( inputChar == valEle.y ){
+            nextState = valEle.x ;
+       }
+    }
+    return nextState ;
+}
+
+
+static __inline__  __device__ int notex_lookup(int2* d_hashRowPtr, int2 *d_hashValPtr,
+    int state, int inputChar, const int hash_m, const int hash_p )
+{ 
+    int2 rowEle = d_hashRowPtr[state];
+    int offset  = rowEle.x ;
+    int nextState = TRAP_STATE ;
+    if ( 0 <= offset ){ 
+       int k_sminus1 = rowEle.y ;
+       int sminus1 = k_sminus1 & HASH_KEY_S_MASK ;
+       int k = k_sminus1 >> HASH_KEY_K_MASKBITS ; 
+       int x = k * inputChar ;
+       int alpha_hat = x >> hash_m ;
+       int beta = x - hash_p * alpha_hat ;
+       if ( 0 > beta ){ // alpha_hat = (x/p)+1
+            beta += hash_p ;
+       }
+       int pos = beta & sminus1 ;
+       int2 valEle = d_hashValPtr[offset + pos];
+       if ( inputChar == valEle.y ){
+            nextState = valEle.x ;
+       }
+    }
+    return nextState ;
+}
+
+static __inline__  __device__ int tex_loadTableOfInitialState(int ch)
+{
+    return tex1Dfetch(tex_tableOfInitialState_reduce, ch); 
+}
 
  
+
+template <int TEXTURE_ON , int SMEM_ON >
+__global__ void PFAC_reduce_space_driven_device(
+    int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
+    const int hash_m, const int hash_p,
+    int *d_input_string, int input_size, 
+    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
+    int *d_pos, int *d_match_result, int *d_nnz_per_block );
+    
+/*
+ *  stage 1: perform matching process and zip non-zero (matched thread) into continuous
+ *      memory block and keep order. Morever nnz of each thread block is stored in d_nnz_per_block
+ *
+ *  d_nnz_per_block[j] = nnz of thread block j
+ *
+ *  since each thread block processes 1024 substrings, so range of d_nnz_per_block[j] is [0,1024] 
+ */
+
+__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle, 
+    int *d_input_string, int input_size,
+    int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
+    int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched )
+{
+    cudaError_t cuda_status ;
+
+    int num_finalState = handle->numOfFinalStates;
+    int initial_state  = handle->initial_state;
+    bool smem_on = ((4*EXTRA_SIZE_PER_TB-1) >= handle->maxPatternLen) ;
+    bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
+
+#ifdef DEBUG_MSG
+    if ( texture_on ){
+        printf("run PFAC_reduce_kernel (texture ON) \n");
+    }else{
+        printf("run PFAC_reduce_kernel (texture OFF) \n");
+    }
+
+    if (smem_on) {
+        printf("run PFAC_reduce_kernel (smem ON ), maxPatternLen = %d\n", handle->maxPatternLen);
+    }else{
+        printf("run PFAC_reduce_kernel (smem OFF), maxPatternLen = %d\n", handle->maxPatternLen);
+    }
+#endif
+
+
+    size_t offset ;
+    /* always bind texture to tex_tableOfInitialState */
+    // (3) bind texture to tex_tableOfInitialState
+    textureReference *texRefTableOfInitialState ;
+    cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState_reduce" );
+
+    cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
+    // set texture parameters
+    tex_tableOfInitialState_reduce.addressMode[0] = cudaAddressModeClamp;
+    tex_tableOfInitialState_reduce.addressMode[1] = cudaAddressModeClamp;
+    tex_tableOfInitialState_reduce.filterMode     = cudaFilterModePoint;
+    tex_tableOfInitialState_reduce.normalized     = 0;
+    
+    cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTableOfInitialState,
+        (const void*) handle->d_tableOfInitialState, (const struct cudaChannelFormatDesc*) &channelDesc_tableOfInitialState,
+        sizeof(int)*CHAR_SET ) ;
+
+    if ( cudaSuccess != cuda_status ){
+#ifdef DEBUG_MSG
+        printf("Error: cannot bind texture to tableOfInitialState, %s\n", cudaGetErrorString(cuda_status) );
+#endif
+        return PFAC_STATUS_CUDA_ALLOC_FAILED ;
+    }
+
+    if ( 0 != offset ){
+#ifdef DEBUG_MSG
+        printf("Error: offset is not zero\n");
+#endif
+        return PFAC_STATUS_INTERNAL_ERROR ;
+    }
+
+    if ( texture_on ){
+
+        // (1) bind texture to tex_hashRowPtr
+        textureReference *texRefHashRowPtr ;
+        cudaGetTextureReference( (const struct textureReference**)&texRefHashRowPtr, "tex_hashRowPtr_reduce" );
+
+        cudaChannelFormatDesc channelDesc_hashRowPtr = cudaCreateChannelDesc<int2>();
+    
+        // set texture parameters
+        tex_hashRowPtr_reduce.addressMode[0] = cudaAddressModeClamp;
+        tex_hashRowPtr_reduce.addressMode[1] = cudaAddressModeClamp;
+        tex_hashRowPtr_reduce.filterMode     = cudaFilterModePoint;
+        tex_hashRowPtr_reduce.normalized     = 0;
+    
+        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashRowPtr,
+            (const void*) handle->d_hashRowPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashRowPtr,
+            sizeof(int2)*(handle->numOfStates) ) ;
+
+        if ( cudaSuccess != cuda_status ){
+#ifdef DEBUG_MSG
+            printf("Error: cannot bind texture to hashRowPtr, %s\n", cudaGetErrorString(cuda_status) );
+#endif
+            return PFAC_STATUS_CUDA_ALLOC_FAILED ;
+        }
+
+        if ( 0 != offset ){
+#ifdef DEBUG_MSG
+            printf("Error: offset is not zero\n");
+#endif
+            return PFAC_STATUS_INTERNAL_ERROR ;
+        }
+    
+        // (2) bind texture to tex_hashValPtr
+        textureReference *texRefHashValPtr ;
+        cudaGetTextureReference( (const struct textureReference**)&texRefHashValPtr, "tex_hashValPtr_reduce" );
+
+        cudaChannelFormatDesc channelDesc_hashValPtr = cudaCreateChannelDesc<int2>();
+        // set texture parameters
+        tex_hashValPtr_reduce.addressMode[0] = cudaAddressModeClamp;
+        tex_hashValPtr_reduce.addressMode[1] = cudaAddressModeClamp;
+        tex_hashValPtr_reduce.filterMode     = cudaFilterModePoint;
+        tex_hashValPtr_reduce.normalized     = 0;
+    
+        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashValPtr,
+            (const void*) handle->d_hashValPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashValPtr,
+            handle->sizeOfTableInBytes ) ;
+        if ( cudaSuccess != cuda_status ){
+#ifdef DEBUG_MSG
+            printf("Error: cannot bind texture to hashValPtr, %s\n", cudaGetErrorString(cuda_status) );
+#endif
+            return PFAC_STATUS_CUDA_ALLOC_FAILED ;
+        }
+
+        if ( 0 != offset ){
+#ifdef DEBUG_MSG
+            printf("Error: offset is not zero\n");
+#endif
+            return PFAC_STATUS_INTERNAL_ERROR ;
+        }
+
+    }
+    
+    
+    if (smem_on) {
+        if ( texture_on ){
+            PFAC_reduce_space_driven_device<1, 1> <<< dimGrid, dimBlock >>>( 
+                handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
+                handle->hash_m, handle->hash_p, 
+                d_input_string, input_size, n_hat, num_finalState, initial_state, num_blocks - 1,
+                d_pos, d_match_result, d_nnz_per_block );
+        }else{
+            PFAC_reduce_space_driven_device<0, 1> <<< dimGrid, dimBlock >>>( 
+                handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
+                handle->hash_m, handle->hash_p, 
+                d_input_string, input_size, n_hat, num_finalState, initial_state, num_blocks - 1,
+                d_pos, d_match_result, d_nnz_per_block );
+        }
+    }else{
+        if ( texture_on ){
+            PFAC_reduce_space_driven_device<1, 0> <<< dimGrid, dimBlock >>>( 
+                handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
+                handle->hash_m, handle->hash_p, 
+                d_input_string, input_size, n_hat, num_finalState, initial_state, num_blocks - 1,
+                d_pos, d_match_result, d_nnz_per_block );
+        }else{
+            PFAC_reduce_space_driven_device<0, 0> <<< dimGrid, dimBlock >>>( 
+                handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
+                handle->hash_m, handle->hash_p, 
+                d_input_string, input_size, n_hat, num_finalState, initial_state, num_blocks - 1,
+                d_pos, d_match_result, d_nnz_per_block );
+        }
+    }
+    
+    cuda_status = cudaGetLastError() ;
+    if ( cudaSuccess != cuda_status ){
+        cudaUnbindTexture(tex_tableOfInitialState_reduce);
+        if ( texture_on ) { 
+            cudaUnbindTexture(tex_hashRowPtr_reduce);
+            cudaUnbindTexture(tex_hashValPtr_reduce);
+        }
+        return PFAC_STATUS_INTERNAL_ERROR ;
+    }
+
+    cudaUnbindTexture(tex_tableOfInitialState_reduce);
+    if ( texture_on ){
+        cudaUnbindTexture(tex_hashRowPtr_reduce);
+        cudaUnbindTexture(tex_hashValPtr_reduce);
+        
+    }
+
+    /*
+     *  stage 2: use Thrust to do in-place prefix_sum( d_nnz_per_block[0:num_blocks-1] ) 
+     *      
+     *  after inclusive_scan, then 
+     *
+     *  d_nnz_per_block[j] = prefix_sum( d_nnz_per_block[0:j] )
+     *
+     *  d_nnz_per_block[num_blocks-1] = total number of non-zero = h_num_matched 
+     *
+     */
+    thrust::device_ptr<int> dev_nnz_per_block ( d_nnz_per_block ) ;
+    thrust::inclusive_scan(dev_nnz_per_block, dev_nnz_per_block + num_blocks, dev_nnz_per_block );
+
+    cuda_status = cudaMemcpy( h_num_matched, d_nnz_per_block + num_blocks-1, sizeof(int), cudaMemcpyDeviceToHost) ;
+    if ( cudaSuccess != cuda_status ){
+        return PFAC_STATUS_INTERNAL_ERROR ;
+    }
+
+    return PFAC_STATUS_SUCCESS ;
+}    
+
+
 
 /*
-
-technical notes of zip_inplace_kernel
-
------------------------------------------------------------------------
-compiler nvcc removes "sleep function" 
-
-[code]
-    __syncthreads();
-    int timeout = 2 ;    
-    if ( tid < 2 ){
-        while(1){
-            volatile int s1 = d_semaphore[ w_smem[0] ] ;
-            volatile int s2 = d_semaphore[ w_smem[1] ] ;
-            if ( 2 == (s1+s2) ){ 
-                break ; 
-            }
-            // sleeping function to avoid spinlock
-            int j = 0 ;
-            while(1){
-                if ( j > timeout){
-                    timeout *= 2 ;
-                    break ;
-                }
-                j++ ;
-            }
-            timeout = (timeout & (TIMEOUT_BOUND-1)) + 2 ;
-        }
+ *  (1) transition table of initial state is in the shared memory phi_s02s1
+ *      we don't need to look up table in texture tex_PFAC_table
+ *
+ *  (2) final states are reordered as 0, 1, 2, ..., k -1
+ *      so state number < k (number of final states) means final state
+ */
+#define  SUBSEG_MATCH( j, match ) \
+    pos = tid + j * BLOCK_SIZE ;\
+    if ( pos < bdy ){ \
+        inputChar = s_char[pos]; \
+        state = phi_s02s1[ inputChar ]; \
+        if ( TRAP_STATE != state ){ \
+            if ( state <= num_finalState ){ \
+                match = state;\
+            } \
+            pos = pos + 1; \
+            while ( pos < bdy ) { \
+                inputChar = s_char[pos]; \
+                state = tex_lookup(state, inputChar, hash_m, hash_p ); \
+                if ( TRAP_STATE == state ){ break ;} \
+                if ( state <= num_finalState ){ \
+                    match = state;\
+                }\
+                pos = pos + 1;\
+            }\
+        }\
     }
-    __syncthreads(); // necessary for global sync
-[code]    
+// end macro
 
-becomes
+#define  SUBSEG_MATCH_NOTEX( j, match ) \
+    pos = tid + j * BLOCK_SIZE ;\
+    if ( pos < bdy ){ \
+        inputChar = s_char[pos]; \
+        state = phi_s02s1[ inputChar ]; \
+        if ( TRAP_STATE != state ){ \
+            if ( state <= num_finalState ){ \
+                match = state;\
+            } \
+            pos = pos + 1; \
+            while ( pos < bdy ) { \
+                inputChar = s_char[pos]; \
+                state = notex_lookup(d_hashRowPtr, d_hashValPtr, state, inputChar, hash_m, hash_p ) ; \
+                if ( TRAP_STATE == state ){ break ;} \
+                if ( state <= num_finalState ){ \
+                    match = state;\
+                }\
+                pos = pos + 1;\
+            }\
+        }\
+    }
+// end macro
 
-[code]
+#define  SUBSEG_MATCH_NOSMEM( j, match ) \
+    pos = ( gbid * BLOCK_SIZE * NUM_INTS_PER_THREAD * 4 ) + tid + j * BLOCK_SIZE ;\
+    if ( pos < input_size ){ \
+        inputChar = (unsigned char) char_d_input_string[pos]; \
+        state = phi_s02s1[ inputChar ]; \
+        if ( TRAP_STATE != state ){ \
+            if ( state <= num_finalState ){ \
+                match = state;\
+            } \
+            pos = pos + 1; \
+            while ( pos < input_size ) { \
+                inputChar = (unsigned char) char_d_input_string[pos]; \
+                state = tex_lookup(state, inputChar, hash_m, hash_p ); \
+                if ( TRAP_STATE == state ){ break ;} \
+                if ( state <= num_finalState ){ \
+                    match = state;\
+                }\
+                pos = pos + 1;\
+            }\
+        }\
+    }
+// end macro
+
+
+#define  SUBSEG_MATCH_NOSMEM_NOTEX( j, match ) \
+    pos = ( gbid * BLOCK_SIZE * NUM_INTS_PER_THREAD * 4 ) + tid + j * BLOCK_SIZE ;\
+    if ( pos < input_size ){ \
+        inputChar = (unsigned char) char_d_input_string[pos]; \
+        state = phi_s02s1[ inputChar ]; \
+        if ( TRAP_STATE != state ){ \
+            if ( state <= num_finalState ){ \
+                match = state;\
+            } \
+            pos = pos + 1; \
+            while ( pos < input_size ) { \
+                inputChar = (unsigned char) char_d_input_string[pos]; \
+                state = notex_lookup(d_hashRowPtr, d_hashValPtr, state, inputChar, hash_m, hash_p ) ; \
+                if ( TRAP_STATE == state ){ break ;} \
+                if ( state <= num_finalState ){ \
+                    match = state;\
+                }\
+                pos = pos + 1;\
+            }\
+        }\
+    }
+// end macro
+
+
+/*
+ *  caller must reset working space s_Data first
+ *
+ *  This device function comes from SDK/scan
+ *  
+ *  original code
+ *  [code]
+ *    //assuming size <= WARP_SIZE
+ *   inline __device__ uint warpScanInclusive(uint idata, uint *s_Data, uint size){
+ *       uint pos = 2 * threadIdx.x - (threadIdx.x & (size - 1));
+ *       s_Data[pos] = 0;
+ *       pos += size;
+ *       s_Data[pos] = idata;
+ *
+ *       for(uint offset = 1; offset < size; offset <<= 1)
+ *           s_Data[pos] += s_Data[pos - offset];
+ *
+ *       return s_Data[pos];
+ *   }
+ *  [/code]
+ *
+ *  Question: one may wonder why volatile keyword is missing?
+ *  nvcc 3.2 will keep "s_Data[pos] = ..." and cuobjdump shows
+ *  [code]
+ *       int pos = 2 * id - (id &31);
+ *       s_Data[pos] = 0 ;
+ *       pos += 32 ;
+ *       s_Data[pos] = idata ;
+ *       R0 = idata ;
+ *       for( int offset = 1 ; offset < 32 ; offset <<= 1 ){
+ *           R0 += s_Data[pos - offset];
+ *           s_Data[pos] = R0 ;
+ *       }
+ *       return s_Data[pos];
+ *  [/code]
+ *
+ *  check http://forums.nvidia.com/index.php?showtopic=193730
+ *
+ */
+inline __device__ int warpScanInclusive(int idata, int id, int *s_Data)
+{
+    int pos = 2 * id - (id &31);
+    // s_Data[pos] = 0 ;
+    pos += 32 ;
+    s_Data[pos] = idata ;
+    
+    for( int offset = 1 ; offset < 32 ; offset <<= 1 ){
+        s_Data[pos] += s_Data[pos - offset];
+    }
+    return s_Data[pos];
+}
+
+
+#define MANUAL_EXPAND_2( X )   { X ; X ; }
+#define MANUAL_EXPAND_4( X )   { MANUAL_EXPAND_2( MANUAL_EXPAND_2( X ) )  }
+#define MANUAL_EXPAND_8( X )   { MANUAL_EXPAND_4( MANUAL_EXPAND_4( X ) )  }
+
+/*
+ *  resource usage
+ *  sm20:
+ *      1) use smem
+ *          32 regs, 5120B smem, 96B cmem, => 1024 threads / SM
+ *      2) no smem
+ *          40 regs, 5120B smem, 96B cmem, => 768 threads / SM
+ *  sm13:
+ *      1) use smem
+ *          24 regs, 5200B smem, 52B cmem, => 256 threads / SM
+ *      2) no smem
+ *          32 regs, 5200B smem, 52B cmem, => 256 threads / SM 
+ *
+ *  sm11:
+ *      1) use smem
+ *          24 regs, 5200B smem, 52B cmem, => 256 threads / SM
+ *      2) no smem
+ *          32 regs, 5200B smem, 8B  cmem, => 256 threads / SM  
+ */
+
+template <int TEXTURE_ON , int SMEM_ON >
+__global__ void PFAC_reduce_space_driven_device(
+    int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
+    const int hash_m, const int hash_p,
+    int *d_input_string, int input_size, 
+    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
+    int *d_pos, int *d_match_result, int *d_nnz_per_block )
+{
+    int tid   = threadIdx.x ;
+    int gbid  = blockIdx.y * gridDim.x + blockIdx.x ;
+    int start ;
+    int pos;   
+    int state;
+    int inputChar;
+    int match[4*NUM_INTS_PER_THREAD] ;
+    __shared__ int s_input[ BLOCK_SIZE*NUM_INTS_PER_THREAD*4];
+    __shared__ int phi_s02s1[ 256 ] ;
+    volatile unsigned char *s_char;
+    char * char_d_input_string ;
+     
+    if ( gbid > num_blocks_minus1 ){
+        return ; // whole block is outside input stream
+    }
+        
+    #pragma unroll
+    for(int i = 0 ; i < 4*NUM_INTS_PER_THREAD ; i++){
+        match[i] = 0 ;
+    }
+
+    // load transition table of initial state to shared memory
+    // we always bind table of initial state to texture
+    #pragma unroll
+    for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
+        phi_s02s1[ tid + i*BLOCK_SIZE ] = tex_loadTableOfInitialState(tid + i*BLOCK_SIZE); 
+    }    
+
+/*
+    if ( TEXTURE_ON ){
+        #pragma unroll
+        for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
+            phi_s02s1[ tid + i*BLOCK_SIZE ] = tex_loadTableOfInitialState(tid + i*BLOCK_SIZE); 
+        }
+    }else{
+        #pragma unroll
+        for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
+            phi_s02s1[ tid + i*BLOCK_SIZE ] = d_tableOfInitialState[tid + i*BLOCK_SIZE]; 
+        }    
+    }
+*/
+
+#if  BLOCK_SIZE < EXTRA_SIZE_PER_TB
+    #error BLOCK_SIZE should be bigger than EXTRA_SIZE_PER_TB
+#endif
+
+    if ( SMEM_ON ){  
+        // legal thread block which contains some input stream
+        s_char = (unsigned char *)s_input;
+
+        // read global data to shared memory
+        start = gbid * (BLOCK_SIZE*NUM_INTS_PER_THREAD) + tid ;
+        #pragma unroll
+        for(int i = 0 ; i < NUM_INTS_PER_THREAD ; i++){
+            if ( start < n_hat ){
+                s_input[tid + i*BLOCK_SIZE] = d_input_string[start];
+            }
+            start += BLOCK_SIZE ;
+        }
+        if ( (start < n_hat) && (tid < EXTRA_SIZE_PER_TB) ){
+            s_input[tid + NUM_INTS_PER_THREAD*BLOCK_SIZE] = d_input_string[start];
+        }
+    }// if SMEM_ON
+    
+    __syncthreads();
+
+    // bdy = number of legal characters starting at gbid*BLOCKSIZE*4
+    int bdy = input_size - gbid*(BLOCK_SIZE * NUM_INTS_PER_THREAD * 4);
+
+#if 2 != NUM_INTS_PER_THREAD
+    #error  NUM_INTS_PER_THREAD must be 2, or MANUAL_EXPAND_8 is wrong
+#endif  
+    
+    if ( SMEM_ON ){  
+        if ( TEXTURE_ON ){
+            int j = 0 ;
+            MANUAL_EXPAND_8( SUBSEG_MATCH(j, match[j]) ; j++ ; ) 
+        }else{
+            int j = 0 ;
+            MANUAL_EXPAND_8( SUBSEG_MATCH_NOTEX(j, match[j]) ; j++ ;)
+        }        
+    }else{
+        char_d_input_string = (char*)d_input_string ; // used only when SMEM_ON = 0
+        if ( TEXTURE_ON ){
+            int j = 0 ;
+            MANUAL_EXPAND_8( SUBSEG_MATCH_NOSMEM(j, match[j]) ; j++ ; ) 
+        }else{
+            int j = 0 ;
+            MANUAL_EXPAND_8( SUBSEG_MATCH_NOSMEM_NOTEX(j, match[j]) ; j++ ;)
+        }            
+    
+    }
+    
+    // matching is done, we can re-use shared memory s_input and phi_s02s1 
+    // to do inclusive_scan
+    // we have 128 thread per block (4 warps per block) and each thread needs to 
+    // process 8 (4*NUM_INTS_PER_THREAD) substrings. It is equivalent to say
+    // 4 x 8 = 32 warps processing 1024 substrings. 
+    // if we concatenate match[j] to a linear array of 1024 entries, then
+    // acc_pos[j] of lane_id = number of non-zero of match[j] of thread k, k <= lane_id
+    //                       = prefix_sum( match[32*j:32*j+land_id] ) 
+    // acc_warp[j] is number of nonzero of match[32*j:32*j+31]
+    //                       = prefix_sum( match[32*j:32*j+31] )
+    // 
+    // stage 1: inclusive scan inside a warp
+    int  warp_id = tid >> 5 ;
+    int  lane_id = tid & 31 ;
+    int  acc_pos[4*NUM_INTS_PER_THREAD] ;
+    int *acc_warp = phi_s02s1 ; // alias acc_warp[32] to phi_s02s1
+                                // reuse phi_s02s1
+#if  32 != (NUM_WARPS_PER_BLOCK * 4*NUM_INTS_PER_THREAD)   
+    #error 32 != (NUM_WARPS_PER_BLOCK * 4*NUM_INTS_PER_THREAD)
+#endif
+
+    __syncthreads(); // s_input and phi_s02s1 can be re-used
+    
+#if 200 <= __CUDA_ARCH__
+
+    if ( 0 == warp_id ){
+        s_input[lane_id] = 0 ;
+    }
+    int k = 0 ;
+    unsigned int match_pattern ;
+    MANUAL_EXPAND_8( match_pattern = __ballot( match[k] > 0 ); \
+        match_pattern <<= (31-lane_id); \
+        acc_pos[k] = __popc(match_pattern); \
+        if ( 31 == lane_id ){ \
+            acc_warp[ warp_id + k * NUM_WARPS_PER_BLOCK ] = acc_pos[k] ;\
+        }\
+        k++ ; )
     __syncthreads();
     
-    if ( tid < 2 ){
-        while(1){
-            volatile int s1 = d_semaphore[ w_smem[0] ] ;
-            volatile int s2 = d_semaphore[ w_smem[1] ] ;
-            if ( 2 == (s1+s2) ){ 
-                break ; 
-            }
-        }
+#else
+
+    // clear supplemet area of s_input
+    #pragma unroll
+    for (int k = 0 ; k < 4 ; k++ ){
+        int id = tid + k*BLOCK_SIZE ;
+        int pos = 2 * id - (id &31);
+        s_input[pos] = 0 ;
     }
-    __syncthreads(); // necessary for global sync
-[code]    
-
------------------------------------------------------------------------------
-
-The following code hangs on Fermi on some benchmarks and is reproducible. 
-However from assembly code generated by cuobjdump on sm13, 
-compiler does wrong translation even "volatile" is declared.
-
-[code] 
-    volatile __shared__ int w_smem[2] ;
-    volatile __shared__ int s_smem[2] ;
     
-    __syncthreads(); 
-    int timeout = 2 ;    
-    if ( tid < 2 ){
-        int s_idx = w_smem[tid];
-        while(1){
-            s_smem[tid] = d_semaphore[ s_idx ] ;
-            if ( 2 == (s_smem[0] + s_smem[1]) ){ 
-                break ; 
-            }
-            // sleeping function to avoid spinlock
-            int j = 0 ;
-            while(1){
-                if ( j > timeout){
-                    timeout *= 2 ;
-                    break ;
-                }
-                j++ ;
-            }
-            s_smem[tid] = 0 ;
-            timeout = (timeout & (TIMEOUT_BOUND-1)) + 2 ;
+    __syncthreads();
+    int k = 0 ;
+    int idata ;
+    MANUAL_EXPAND_4( idata = match[k] > 0 ; \
+        acc_pos[k] = warpScanInclusive(idata, tid + k*BLOCK_SIZE, s_input); \
+        if ( 31 == lane_id ){  \
+            acc_warp[ warp_id + k * NUM_WARPS_PER_BLOCK ] = acc_pos[k] ;\
+        } \
+        k++ ; ) 
+    // __syncthreads(); // not necessary     
+    k = 0 ;
+    MANUAL_EXPAND_4( idata = match[4+k] > 0 ; \
+        acc_pos[4+k] = warpScanInclusive(idata, tid + k*BLOCK_SIZE, s_input); \
+        if ( 31 == lane_id ){  \
+            acc_warp[ warp_id + (4+k) * NUM_WARPS_PER_BLOCK ] = acc_pos[4+k] ;\
+        } \
+        k++ ; )     
+    __syncthreads();
+
+#endif
+
+    // stage 2:  acc_pos[0:7] and acc_warp[0:31] are done, we can re-use s_input again
+    // s_input[32+j] = prefix_sum( acc_warp[0:j] )
+    // note that s_input[0:31] always keeps zero 
+    if ( 0 == warp_id ){
+        warpScanInclusive(acc_warp[lane_id], lane_id, s_input);
+    }
+    
+    __syncthreads();
+
+    // stage 3: s_input[32:63] contains information as
+    // s_input[32+j+1] - s_input[32+j] = nnz of warp j
+    // s_input[63] = prefix_sum( match[0:1023] )
+    // correct local position of each matched substring
+    // note that position starts from 0, so we need minus 1,
+    // for example, suppose acc_pos[0] of warp 0 is
+    //           1 1 1 2 3 ...
+    // then t0, t3, t4 match, and should write to position of matched result
+    //           0 0 0 1 2 ...
+    //  d_match_result[ t0, t3, t4, ...]  
+    //  d_pos[ 0, 3, 4, ...]
+    #pragma unroll
+    for (int j = 0 ; j < 4*NUM_INTS_PER_THREAD ; j++ ){
+        acc_pos[j] += ( s_input[31 + warp_id + j * NUM_WARPS_PER_BLOCK] - 1 ) ; 
+    }
+    int nnz = s_input[63];
+    
+    __syncthreads();
+
+    // stage 4: all data are in acc_pos[] and match[], s_input can be reused again
+    // collect non-zero data to s_input, then do coalesced write
+    start = gbid * (BLOCK_SIZE * NUM_INTS_PER_THREAD * 4) ;
+        
+    #pragma unroll    
+    for (int j = 0 ; j < 4*NUM_INTS_PER_THREAD ; j++ ){
+        if ( match[j] ){
+            s_input[ acc_pos[j] ] = match[j];
         }
     }
-    __syncthreads(); 
-[/code]
-
-becomes 
-
-[code]
-
-    __syncthreads();     
-    if ( tid < 2 ){
-        int s_idx = w_smem[tid];
-        int R0 = d_semaphore[ s_idx ] ;  // wrong translation
-                 // because d_semaphore cannot be updated  
-        while(1){
-            s_smem[tid] = R0 ;
-            if ( 2 == (s_smem[0] + s_smem[1]) ){ 
-                break ; 
-            }
-            s_smem[tid] = 0 ;
+    __syncthreads();
+    
+    for (int j = tid ; j < nnz; j+= BLOCK_SIZE ){
+        d_match_result[start + j ] = s_input[j] ;
+    }
+    __syncthreads();
+    
+    #pragma unroll
+    for (int j = 0 ; j < 4*NUM_INTS_PER_THREAD ; j++ ){
+        if ( match[j] ){
+            s_input[ acc_pos[j] ] = start + tid + j * BLOCK_SIZE ;
         }
     }
-    __syncthreads(); 
-
-[/code]
-
------------------------------------------------------------------------------
-
-possible sleep function
-[code]
-            // sleeping function to avoid spinlock
-            for(int j = 0 ; j < timeout ; j++ ){
-                s1 += j ;  
-            }
-            if ( s1 > timeout ){
-                timeout *=2 ;
-            }
-            timeout = (timeout & (TIMEOUT_BOUND-1)) + 2 ;
-[/code]
-
-The following code dispears after optimization
-[code]
-            int j = 0 ;
-            while(1){
-                if ( j > timeout){
-                    timeout *= 2 ;
-                    break ;
-                }
-                j++ ;
-            }
-            timeout = (timeout & (TIMEOUT_BOUND-1)) + 2 ;
-[/code]
-
---------------------------------------------------------------------------
-
-This form is not good, if we interchange reading of (s1, s2) and sleep function,
-then spinlock is relaxed, why?
-[code]
-    int timeout = 4 ;
-    if ( 0 == tid ){    
-        while(1){
-            volatile int s1 = d_semaphore[ w_smem[0] ] ;
-            volatile int s2 = d_semaphore[ w_smem[1] ] ;
-            if ( 2 == (s1+s2) ){ 
-                break ; 
-            }
-            // sleeping function to avoid spinlock
-            for(int j = 0 ; j < timeout ; j++ ){
-                s1 += j ;  
-            }
-            if ( s1 > timeout ){
-                timeout *= 2 ;
-            }
-            if ( TIMEOUT_BOUND < timeout ){
-                *d_spinlock = gbid ; // spinlock occurs, matched result may be wrong
-                break ;
-            }
-        }
+    __syncthreads();
+    
+    for (int j = tid ; j < nnz; j+= BLOCK_SIZE ){
+        d_pos[start + j ] = s_input[j] ;
     }
-[/code]
+    
+    if ( 0 == tid ){
+        d_nnz_per_block[ gbid ] = nnz ;
+    }       
+}
 
-*/    
-
-
- 

@@ -15,6 +15,8 @@
  */
 
 #include <cuda_runtime.h>
+#include <vector>
+using namespace std ;
 
 #ifndef PFAC_P_H_
 #define PFAC_P_H_
@@ -38,6 +40,47 @@ typedef PFAC_status_t (*PFAC_reduce_kernel_protoType)( PFAC_handle_t handle, int
 }
 #endif   // __cplusplus
 
+typedef struct {
+    int nextState ; 
+    int ch ;
+} TableEle ; 
+
+/*
+ *  suppose transistion table has S states, labelled as s0, s1, ... s{S-1}
+ *  and Bj denotes number of valid transition of s{i}
+ *  for each state, we use sj >= Bj^2 locations to contain Bj transistion.
+ *  In order to avoid collision, we choose a value k and a prime p such that
+ *  (k*x mod p mod sj) != (k*y mod p mod sj) for all characters x, y such that 
+ *  (s{j}, x) and (s{j}, y) are valid transitions.
+ *  
+ *  Hash table consists of rowPtr and valPtr, similar to CSR format.
+ *  valPtr contains all transitions and rowPtr[i] contains offset pointing to valPtr.
+ *
+ *  Element of rowPtr is int2, which is equivalent to
+ *  typedef struct{
+ *     int offset ;
+ *     int k_sminus1 ;
+ *  } 
+ *
+ *  sj is power of 2 and less than 256, and 0 < kj < 256, so we can encode (k,s-1) by a
+ *  32-bit integer, k occupies most significant 16 bits and (s-1) occupies Least significant 
+ *  16 bits.
+ *
+ *  sj is power of 2 and we need to do modulo s, in order to speedup, we use mask to do 
+ *  modulo, say x mod s = x & (s-1)
+ *
+ *  Element of valPtr is int2, equivalent to
+ *  tyepdef struct{
+ *     int nextState ;
+ *     int ch ;
+ *  } 
+ *
+ *  
+ */
+
+#define  HASH_KEY_K_MASK   0xFFFF0000
+#define  HASH_KEY_K_MASKBITS   16
+#define  HASH_KEY_S_MASK   0x0000FFFF
 
 
 struct PFAC_context {
@@ -64,36 +107,55 @@ struct PFAC_context {
     char *valPtr ;  // contains all patterns, each pattern is terminated by null character '\0'
     int *patternLen_table ;
     int *patternID_table ;
+
+    vector< vector<TableEle> > *table_compact;
     
-    int *PFAC_table ;
+    int  *h_PFAC_table ; /* explicit 2-D table */
+
+    int2 *h_hashRowPtr ;
+    int2 *h_hashValPtr ;
+    int  *h_tableOfInitialState ;
+    int  hash_p ; // p = 2^m + 1 
+    int  hash_m ;
+
+    // device
+    int  *d_PFAC_table ; /* explicit 2-D table */
+
+    int2 *d_hashRowPtr ;
+    int2 *d_hashValPtr ;
+    int  *d_tableOfInitialState ; /* 256 transition function of initial state */
+
+    size_t  numOfTableEntry ; 
+    size_t  sizeOfTableEntry ; 
+    size_t  sizeOfTableInBytes ; // numOfTableEntry * sizeOfTableEntry
+       
+    // function pointer of non-reduce kernel under PFAC_TIME_DRIVEN
+    PFAC_kernel_protoType  kernel_time_driven_ptr ;
     
+    // function pointer of non-reduce kernel under PFAC_SPACE_DRIVEN
+    PFAC_kernel_protoType  kernel_space_driven_ptr ;
+    
+    // function pointer of reduce kernel under PFAC_TIME_DRIVEN
+    PFAC_reduce_kernel_protoType  reduce_kernel_ptr ;
+    
+    // function pointer of reduce kernel under PFAC_SPACE_DRIVEN
+    PFAC_reduce_kernel_protoType  reduce_inplace_kernel_ptr ;
+
     int maxPatternLen ; /* maximum length of all patterns
                          * this number can determine which kernel is proper,
                          * for example, if maximum length is smaller than 512, then
                          * we can call a kernel with smem
                          */
-
-    // device
-    int *d_PFAC_table   ;
-    
-    cudaArray *d_PFAC_table_array ;
-    cudaChannelFormatDesc channelDesc ;
-    
-    // function pointer of texture version and non-texture version
-    PFAC_kernel_protoType  kernel_ptr ;
-    
-    // function pointer of reduce function under PFAC_TIME_DRIVEN
-    PFAC_reduce_kernel_protoType  reduce_kernel_ptr ;
-    
-    // function pointer of reduce function under PFAC_SPACE_DRIVEN
-    PFAC_reduce_kernel_protoType  reduce_inplace_kernel_ptr ;
-    
-    int  max_state_num ; // maximum number of states
-    int  pattern_num ;   // number of patterns
-    int  state_num ;     // total number of states in the DFA
-    int  num_finalState ; // number of final states
+                             
+    int  max_numOfStates ; // maximum number of states, this is an estimated number from size of pattern file
+    int  numOfPatterns ;  // number of patterns
+    int  numOfStates ; // total number of states in the DFA, states are labelled as s0, s1, ..., s{state_num-1}
+    int  numOfFinalStates ; // number of final states
     int  initial_state ; // state id of initial state
 
+    int  numOfLeaves ; // number of leaf nodes of transistion table. i.e nodes without fan-out
+                       // numOfLeaves <= numOfFinalStates
+    
     int  platform ;
     
     int  perfMode ;
@@ -135,33 +197,13 @@ int dump_reorderPattern( char** rowPtr, int *patternID_table, int *patternLen_ta
 PFAC_status_t parsePatternFile( char *patternFileName, char ***rowPtr, char **patternPool,
     int **patternID_table_ptr, int **patternLen_table_ptr, int *max_state_num_ptr, int *pattern_num_ptr ) ;
 
-/*
- *  Given k = pattern_number patterns in rowPtr[0:k-1] with lexicographic order and
- *  patternLen_table[1:k+1], patternID_table[0:k-1]
- *
- *  user specified a initial state "initial_state",
- *  construct
- *  (1) PFAC_table: DFA of PFAC with k final states labeled from 0:k-1
- *  (2) output_table[0:k-1]:  output_table[j] contains pattern number corresponding to
- *      final state j
- *
- *  WARNING: initial_state >= k, and size(output_table) >= k
- */
-PFAC_status_t create_PFACTable_reorder(const char** rowPtr, const int *patternLen_table, const int *patternID_table,
-    const int max_state_num, const int pattern_num, const int initial_state, int *state_num_ptr,
-    int *PFAC_table ) ;
 
-PFAC_status_t  PFAC_CPU(char *input_string, int input_size,
-    int *PFAC_table,
-    int num_finalState, int initial_state,
-    int *match_result) ;
+//void printStringEndNewLine( char *s, FILE* fp = stdout );
 
-PFAC_status_t  PFAC_CPU_OMP(char *input_string, int input_size,
-    int *PFAC_table,
-    int num_finalState, int initial_state,
-    int *match_result) ;
+void printString( char *s, const int n, FILE* fp );
 
-void printStringEndNewLine( char *s, FILE* fp = stdout );
+
+PFAC_status_t  PFAC_memoryUsage( PFAC_handle_t handle );
 
 #endif   // PFAC_P_H_
 

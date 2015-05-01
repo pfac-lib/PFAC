@@ -14,6 +14,14 @@
  *  limitations under the License.
  */
 
+/*
+ *  F = number of final states, we label final states from s{1}, s{2}, ... s{F}
+ *  and initial state is s{F+1}. s{0} is of no use.
+ *
+ *  if maximum pattern length is less than 512, then we will load transition function
+ *  of initial state to shared memory, so we requires BLOCK_SIZE * k = 256 such that
+ *  each thread load sevral one transition pairs into shared memory  
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,7 +65,12 @@ extern "C" {
     #error BLOCK_SIZE != 32 * NUM_WARPS_PER_BLOCK
 #endif
 
-texture < int, 2, cudaReadModeElementType > tex_PFAC_table_reduce;
+texture < int, 1, cudaReadModeElementType > tex_PFAC_table_reduce;
+
+static __inline__  __device__ int tex_lookup(int state, int inputChar)
+{ 
+    return  tex1Dfetch(tex_PFAC_table_reduce, state*CHAR_SET + inputChar);
+}
 
 template <int TEXTURE_ON , int SMEM_ON >
 __global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string, 
@@ -265,7 +278,7 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle,
 {
     cudaError_t cuda_status ;
 
-    int num_finalState = handle->num_finalState;
+    int num_finalState = handle->numOfFinalStates;
     int initial_state  = handle->initial_state;
     bool smem_on = ((4*EXTRA_SIZE_PER_TB-1) >= handle->maxPatternLen) ;
     bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
@@ -285,15 +298,31 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle,
 #endif
 
     if ( texture_on ){
+        textureReference *texRefTable ;
+        cudaGetTextureReference( (const struct textureReference**)&texRefTable, "tex_PFAC_table_reduce" );
+
+        cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<int>();
+        
         // set texture parameters
         tex_PFAC_table_reduce.addressMode[0] = cudaAddressModeClamp;
         tex_PFAC_table_reduce.addressMode[1] = cudaAddressModeClamp;
         tex_PFAC_table_reduce.filterMode     = cudaFilterModePoint;
         tex_PFAC_table_reduce.normalized     = 0;
-        // bind the array to the texture
-        cuda_status = cudaBindTextureToArray(tex_PFAC_table_reduce, handle->d_PFAC_table_array, handle->channelDesc);
+        
+        size_t offset ;
+        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTable,
+        (const void*) handle->d_PFAC_table, (const struct cudaChannelFormatDesc*) &channelDesc, handle->sizeOfTableInBytes ) ;
         if ( cudaSuccess != cuda_status ){
-            return PFAC_STATUS_CUDA_ALLOC_FAILED;
+#ifdef DEBUG_MSG
+            printf("Error: cannot bind texture, %s\n", cudaGetErrorString(status) );
+#endif
+            return PFAC_STATUS_CUDA_ALLOC_FAILED ;
+        }
+        if ( 0 != offset ){
+#ifdef DEBUG_MSG
+            printf("Error: offset is not zero\n");
+#endif
+            return PFAC_STATUS_INTERNAL_ERROR ;
         }
     }
 
@@ -399,7 +428,7 @@ __global__ void zip_kernel(int *d_pos, int *d_match_result, int *d_nnz_per_block
             pos = pos + 1; \
             while ( pos < bdy ) { \
                 inputChar = s_char[pos]; \
-                state = tex2D(tex_PFAC_table_reduce, inputChar, state); \
+                state = tex_lookup(state, inputChar); \
                 if ( TRAP_STATE == state ){ break ;} \
                 if ( state <= num_finalState ){ \
                     match = state;\
@@ -422,7 +451,7 @@ __global__ void zip_kernel(int *d_pos, int *d_match_result, int *d_nnz_per_block
             pos = pos + 1; \
             while ( pos < input_size ) { \
                 inputChar = (unsigned char) char_d_input_string[pos]; \
-                state = tex2D(tex_PFAC_table_reduce, inputChar, state); \
+                state = tex_lookup(state, inputChar); \
                 if ( TRAP_STATE == state ){ break ;} \
                 if ( state <= num_finalState ){ \
                     match = state;\
@@ -588,7 +617,7 @@ __global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string
     if ( TEXTURE_ON ){
         #pragma unroll
         for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
-            phi_s02s1[ tid + i*BLOCK_SIZE ] = tex2D(tex_PFAC_table_reduce, tid + i*BLOCK_SIZE, initial_state ) ;
+            phi_s02s1[ tid + i*BLOCK_SIZE ] = tex_lookup(initial_state, tid + i*BLOCK_SIZE); 
         }
     }else{
         #pragma unroll

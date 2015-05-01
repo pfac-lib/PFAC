@@ -27,6 +27,7 @@ INCPATH += -I../include/
 CU_SRC = PFAC_kernel.cu
 CU_SRC += PFAC_reduce_kernel.cu
 CU_SRC += PFAC_reduce_inplace_kernel.cu
+CU_SRC += PFAC_kernel_spaceDriven.cu
 
 CPP_SRC  = PFAC_reorder_Table.cpp
 CPP_SRC += PFAC_CPU.cpp
@@ -57,9 +58,9 @@ cu_cpp_obj_sm11_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm11_%.cpp.o,$(CU_CPP))
 
 all: mk_libso_no21 mk_libso_21  mk_liba   
 
-sm21_command := $(if $(cuda_32),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm21.so $(LIBS) $(cu_cpp_obj_sm21_loc),)
+sm21_command := $(if $(sm_21_support),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm21.so $(LIBS) $(cu_cpp_obj_sm21_loc),)
 
-cu_cpp_sm21_loc := $(if $(cuda_32),$(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp,$(CU_CPP)),)
+cu_cpp_sm21_loc := $(if $(sm_21_support),$(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp,$(CU_CPP)),)
 
 
 mk_libso_no21: $(cu_cpp_sm20_loc) $(cu_cpp_sm13_loc) $(cu_cpp_sm12_loc) $(cu_cpp_sm11_loc)

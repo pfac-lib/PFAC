@@ -34,7 +34,7 @@
 #include <assert.h>
 #include <ctype.h>
 
-#include "../include/PFAC.h"
+#include <PFAC.h>
  
 #define FILENAME_MAXLEN     256
 
@@ -49,15 +49,17 @@ typedef struct {
     int  deviceID ;
     bool isTextureOn ;
     int  timeOnHost ;
+    int  space_driven ;
 } optsPara ;
 
 
 void showHelp(void)
 {
-    printf("useage: [bin] -P [pattern] -I [input file] -G[GPU id] -t -TH\n");
+    printf("useage: [bin] -P [pattern] -I [input file] -G[GPU id] -t -TH -S\n");
     printf("default of [GPU id] is 0 \n");
     printf("-t : texture mode\n");
     printf("-TH : timing on host, including data transfer \n");
+    printf("-S : space-driven mode (default is time-driven mode)\n");
 }
 
 void processCommandOption( int argc, char** argv, optsPara *opts)
@@ -71,6 +73,9 @@ void processCommandOption( int argc, char** argv, optsPara *opts)
     for( ; argc > 0 ; argc-- , argv++){
         if ( '-' != argv[0][0] ){ continue ; }
             switch( argv[0][1] ){
+            case 'S' :
+                opts->space_driven = 1 ;
+                break ;
             case 'I' : // input file
                 if ( '\0' != argv[0][2] ){
                     fprintf(stderr, "Error: %s is not -I\n", argv[0]);
@@ -173,6 +178,14 @@ int main(int argc, char **argv)
 
     PFAC_status = PFAC_setPlatform( handle, PFAC_PLATFORM_GPU ) ;
     assert(PFAC_STATUS_SUCCESS == PFAC_status);
+
+    if ( opts.space_driven ){
+        printf("----- space-driven version \n");
+        PFAC_status = PFAC_setPerfMode( handle, PFAC_SPACE_DRIVEN ) ;
+        assert(PFAC_STATUS_SUCCESS == PFAC_status) ;
+    }else{
+        printf("----- time-driven version \n");
+    }
 
     PFAC_status = PFAC_readPatternFromFile( handle, opts.patternFile) ;
     if (PFAC_STATUS_SUCCESS != PFAC_status){

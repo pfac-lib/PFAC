@@ -44,7 +44,7 @@
 #include <string.h>
 #include <assert.h>
  
-#include "../include/PFAC.h"
+#include <PFAC.h>
         
 int main(int argc, char **argv)
 {
