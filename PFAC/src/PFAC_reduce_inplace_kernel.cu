@@ -36,7 +36,6 @@
 #include "thrust/scan.h"
 #include "../include/PFAC_P.h"
 
-//#define DEBUG_MSG
 
 #ifdef __cplusplus
 extern "C" {
@@ -66,19 +65,33 @@ extern "C" {
 #endif
 
 
-
-__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle, 
-    int *d_input_string, int input_size,
-    int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
-    int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched );
+/* declaration */
+__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_blocks, 
+    dim3 dimBlock, 
+    dim3 dimGrid,
+    int *d_match_result, 
+    int *d_pos, 
+    int *d_nnz_per_block, 
+    int *h_num_matched );
     
     
 __global__  void  set_semaphore( int *d_w, int num_ones, int size );
 
-
-__global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result, 
-    int *d_nnz_per_block, int *d_atomicBlockID, int *d_semaphore, int *d_spinlock,
+__global__ void zip_inplace_kernel(
+    int *d_pos, 
+    int *d_matched_result, 
+    int *d_nnz_per_block, 
+    int *d_atomicBlockID, 
+    int *d_semaphore, 
+    int *d_spinlock,
     int num_blocks_minus1 );
+
+/* end of declaration */
 
 // ---------------------------- main ----------------------    
  
@@ -139,13 +152,18 @@ __global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result,
  *
  */     
  
-__host__  PFAC_status_t PFAC_reduce_inplace_kernel( PFAC_handle_t handle, int *d_input_string, int input_size,
-    int *d_match_result, int *d_pos, int *h_num_matched, int *h_matched_result, int *h_pos )
+__host__  PFAC_status_t PFAC_reduce_inplace_kernel( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int *d_match_result, 
+    int *d_pos, 
+    int *h_num_matched, 
+    int *h_matched_result, 
+    int *h_pos )
 {
 
-#ifdef DEBUG_MSG
-    printf("call PFAC_reduce_inplace_kernel \n");
-#endif
+    PFAC_PRINTF("call PFAC_reduce_inplace_kernel \n");
 
     int *d_nnz_per_block = NULL ; // working space, d_nnz_per_block[j] = nnz of block j
     int *d_w = NULL ; // working space, d_w = {d_atomicBlockID, d_semaphore, d_spinlock }
@@ -345,8 +363,13 @@ __global__  void  set_semaphore( int *d_w, int num_ones, int size )
  * 
  */
  
-__global__ void zip_inplace_kernel(int *d_pos, int *d_matched_result, 
-    int *d_nnz_per_block, int *d_atomicBlockID, int *d_semaphore, int *d_spinlock,
+__global__ void zip_inplace_kernel(
+    int *d_pos, 
+    int *d_matched_result, 
+    int *d_nnz_per_block, 
+    int *d_atomicBlockID, 
+    int *d_semaphore, 
+    int *d_spinlock,
     int num_blocks_minus1 )
 {
     int tid = threadIdx.x ;
@@ -587,11 +610,20 @@ static __inline__  __device__ int tex_loadTableOfInitialState(int ch)
 
 template <int TEXTURE_ON , int SMEM_ON >
 __global__ void PFAC_reduce_space_driven_device(
-    int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
-    const int hash_m, const int hash_p,
-    int *d_input_string, int input_size, 
-    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
-    int *d_pos, int *d_match_result, int *d_nnz_per_block );
+    int2 *d_hashRowPtr, 
+    int2 *d_hashValPtr, 
+    int *d_tableOfInitialState,
+    const int hash_m, 
+    const int hash_p,
+    int *d_input_string, 
+    int input_size, 
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
+    int *d_pos, 
+    int *d_match_result, 
+    int *d_nnz_per_block );
     
 /*
  *  stage 1: perform matching process and zip non-zero (matched thread) into continuous
@@ -602,100 +634,69 @@ __global__ void PFAC_reduce_space_driven_device(
  *  since each thread block processes 1024 substrings, so range of d_nnz_per_block[j] is [0,1024] 
  */
 
-__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle, 
-    int *d_input_string, int input_size,
-    int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
-    int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched )
+__host__  PFAC_status_t PFAC_reduce_space_driven_stage1( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_blocks, 
+    dim3 dimBlock, 
+    dim3 dimGrid,
+    int *d_match_result, 
+    int *d_pos, 
+    int *d_nnz_per_block, 
+    int *h_num_matched )
 {
     cudaError_t cuda_status ;
+    PFAC_status_t pfac_status = PFAC_STATUS_SUCCESS;
 
     int num_finalState = handle->numOfFinalStates;
     int initial_state  = handle->initial_state;
     bool smem_on = ((4*EXTRA_SIZE_PER_TB-1) >= handle->maxPatternLen) ;
     bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
 
-#ifdef DEBUG_MSG
     if ( texture_on ){
-        printf("run PFAC_reduce_kernel (texture ON) \n");
-    }else{
-        printf("run PFAC_reduce_kernel (texture OFF) \n");
-    }
 
-    if (smem_on) {
-        printf("run PFAC_reduce_kernel (smem ON ), maxPatternLen = %d\n", handle->maxPatternLen);
-    }else{
-        printf("run PFAC_reduce_kernel (smem OFF), maxPatternLen = %d\n", handle->maxPatternLen);
-    }
-#endif
+        cudaError_t cuda_status1, cuda_status2, cuda_status3 ;
+        size_t offset1, offset2, offset3 ;
+        
+        // #### lock mutex, only one thread can bind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
 
-
-    size_t offset ;
-    /* always bind texture to tex_tableOfInitialState */
-    // (3) bind texture to tex_tableOfInitialState
-    textureReference *texRefTableOfInitialState ;
-    cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState_reduce" );
-
-    cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
-    // set texture parameters
-    tex_tableOfInitialState_reduce.addressMode[0] = cudaAddressModeClamp;
-    tex_tableOfInitialState_reduce.addressMode[1] = cudaAddressModeClamp;
-    tex_tableOfInitialState_reduce.filterMode     = cudaFilterModePoint;
-    tex_tableOfInitialState_reduce.normalized     = 0;
+        // (1) bind texture to tex_tableOfInitialState
+        textureReference *texRefTableOfInitialState ;
+        cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState_reduce" );
+        cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
+        // set texture parameters
+        tex_tableOfInitialState_reduce.addressMode[0] = cudaAddressModeClamp;
+        tex_tableOfInitialState_reduce.addressMode[1] = cudaAddressModeClamp;
+        tex_tableOfInitialState_reduce.filterMode     = cudaFilterModePoint;
+        tex_tableOfInitialState_reduce.normalized     = 0;
     
-    cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTableOfInitialState,
-        (const void*) handle->d_tableOfInitialState, (const struct cudaChannelFormatDesc*) &channelDesc_tableOfInitialState,
-        sizeof(int)*CHAR_SET ) ;
+        cuda_status1 = cudaBindTexture( &offset1, (const struct textureReference*) texRefTableOfInitialState,
+            (const void*) handle->d_tableOfInitialState, (const struct cudaChannelFormatDesc*) &channelDesc_tableOfInitialState,
+            sizeof(int)*CHAR_SET ) ;
 
-    if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot bind texture to tableOfInitialState, %s\n", cudaGetErrorString(cuda_status) );
-#endif
-        return PFAC_STATUS_CUDA_ALLOC_FAILED ;
-    }
-
-    if ( 0 != offset ){
-#ifdef DEBUG_MSG
-        printf("Error: offset is not zero\n");
-#endif
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
-
-    if ( texture_on ){
-
-        // (1) bind texture to tex_hashRowPtr
+        // (2) bind texture to tex_hashRowPtr
         textureReference *texRefHashRowPtr ;
         cudaGetTextureReference( (const struct textureReference**)&texRefHashRowPtr, "tex_hashRowPtr_reduce" );
-
         cudaChannelFormatDesc channelDesc_hashRowPtr = cudaCreateChannelDesc<int2>();
-    
         // set texture parameters
         tex_hashRowPtr_reduce.addressMode[0] = cudaAddressModeClamp;
         tex_hashRowPtr_reduce.addressMode[1] = cudaAddressModeClamp;
         tex_hashRowPtr_reduce.filterMode     = cudaFilterModePoint;
         tex_hashRowPtr_reduce.normalized     = 0;
     
-        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashRowPtr,
+        cuda_status2 = cudaBindTexture( &offset2, (const struct textureReference*) texRefHashRowPtr,
             (const void*) handle->d_hashRowPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashRowPtr,
             sizeof(int2)*(handle->numOfStates) ) ;
-
-        if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture to hashRowPtr, %s\n", cudaGetErrorString(cuda_status) );
-#endif
-            return PFAC_STATUS_CUDA_ALLOC_FAILED ;
-        }
-
-        if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
-            return PFAC_STATUS_INTERNAL_ERROR ;
-        }
     
-        // (2) bind texture to tex_hashValPtr
+        // (3) bind texture to tex_hashValPtr
         textureReference *texRefHashValPtr ;
         cudaGetTextureReference( (const struct textureReference**)&texRefHashValPtr, "tex_hashValPtr_reduce" );
-
         cudaChannelFormatDesc channelDesc_hashValPtr = cudaCreateChannelDesc<int2>();
         // set texture parameters
         tex_hashValPtr_reduce.addressMode[0] = cudaAddressModeClamp;
@@ -703,23 +704,30 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle,
         tex_hashValPtr_reduce.filterMode     = cudaFilterModePoint;
         tex_hashValPtr_reduce.normalized     = 0;
     
-        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashValPtr,
+        cuda_status3 = cudaBindTexture( &offset3, (const struct textureReference*) texRefHashValPtr,
             (const void*) handle->d_hashValPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashValPtr,
             handle->sizeOfTableInBytes ) ;
-        if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture to hashValPtr, %s\n", cudaGetErrorString(cuda_status) );
-#endif
+
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+
+        if ( (cudaSuccess != cuda_status1) || 
+             (cudaSuccess != cuda_status2) ||
+             (cudaSuccess != cuda_status3) )
+        {
+            PFAC_PRINTF("Error: cannot bind texture to tableOfInitialState, hashRowPtr, or hashValPtr\n" );
             return PFAC_STATUS_CUDA_ALLOC_FAILED ;
         }
-
-        if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
+       
+        if ( (0 != offset1) || 
+             (0 != offset2) || 
+             (0 != offset3) )
+        {
             return PFAC_STATUS_INTERNAL_ERROR ;
         }
-
     }
     
     
@@ -754,20 +762,28 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle,
     }
     
     cuda_status = cudaGetLastError() ;
-    if ( cudaSuccess != cuda_status ){
-        cudaUnbindTexture(tex_tableOfInitialState_reduce);
-        if ( texture_on ) { 
-            cudaUnbindTexture(tex_hashRowPtr_reduce);
-            cudaUnbindTexture(tex_hashValPtr_reduce);
-        }
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
 
-    cudaUnbindTexture(tex_tableOfInitialState_reduce);
     if ( texture_on ){
+        // #### lock mutex, only one thread can unbind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+
+        cudaUnbindTexture(tex_tableOfInitialState_reduce);
         cudaUnbindTexture(tex_hashRowPtr_reduce);
         cudaUnbindTexture(tex_hashValPtr_reduce);
-        
+
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+    }
+
+    if ( cudaSuccess != cuda_status ){
+        PFAC_PRINTF("Error: PFAC_reduce_space_driven_device failed, %s\n", cudaGetErrorString(cuda_status));
+        return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
     /*
@@ -785,6 +801,7 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1( PFAC_handle_t handle,
 
     cuda_status = cudaMemcpy( h_num_matched, d_nnz_per_block + num_blocks-1, sizeof(int), cudaMemcpyDeviceToHost) ;
     if ( cudaSuccess != cuda_status ){
+        PFAC_PRINTF("Error: after inclusive_scan, %s\n", cudaGetErrorString(cuda_status));
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
@@ -973,11 +990,20 @@ inline __device__ int warpScanInclusive(int idata, int id, int *s_Data)
 
 template <int TEXTURE_ON , int SMEM_ON >
 __global__ void PFAC_reduce_space_driven_device(
-    int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
-    const int hash_m, const int hash_p,
-    int *d_input_string, int input_size, 
-    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
-    int *d_pos, int *d_match_result, int *d_nnz_per_block )
+    int2 *d_hashRowPtr, 
+    int2 *d_hashValPtr, 
+    int *d_tableOfInitialState,
+    const int hash_m, 
+    const int hash_p,
+    int *d_input_string, 
+    int input_size, 
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
+    int *d_pos, 
+    int *d_match_result, 
+    int *d_nnz_per_block )
 {
     int tid   = threadIdx.x ;
     int gbid  = blockIdx.y * gridDim.x + blockIdx.x ;
@@ -1000,14 +1026,6 @@ __global__ void PFAC_reduce_space_driven_device(
         match[i] = 0 ;
     }
 
-    // load transition table of initial state to shared memory
-    // we always bind table of initial state to texture
-    #pragma unroll
-    for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
-        phi_s02s1[ tid + i*BLOCK_SIZE ] = tex_loadTableOfInitialState(tid + i*BLOCK_SIZE); 
-    }    
-
-/*
     if ( TEXTURE_ON ){
         #pragma unroll
         for(int i = 0 ; i < BLOCK_SIZE_DIV_256 ; i++){
@@ -1019,7 +1037,7 @@ __global__ void PFAC_reduce_space_driven_device(
             phi_s02s1[ tid + i*BLOCK_SIZE ] = d_tableOfInitialState[tid + i*BLOCK_SIZE]; 
         }    
     }
-*/
+
 
 #if  BLOCK_SIZE < EXTRA_SIZE_PER_TB
     #error BLOCK_SIZE should be bigger than EXTRA_SIZE_PER_TB
@@ -1041,7 +1059,7 @@ __global__ void PFAC_reduce_space_driven_device(
         if ( (start < n_hat) && (tid < EXTRA_SIZE_PER_TB) ){
             s_input[tid + NUM_INTS_PER_THREAD*BLOCK_SIZE] = d_input_string[start];
         }
-    }// if SMEM_ON
+    }
     
     __syncthreads();
 

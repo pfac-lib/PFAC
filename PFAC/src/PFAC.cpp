@@ -21,11 +21,39 @@
 #include <assert.h>
 #include <dlfcn.h>
 
+#include <pthread.h>
+
+#include "../include/PFAC_P.h"
+
+
 #include <vector>
 
 using namespace std ;
 
-#include "../include/PFAC_P.h"
+
+
+
+/* warpper for pthread_mutex_lock and pthread_mutex_unlock */
+pthread_mutex_t  __pfac_tex_mutex = PTHREAD_MUTEX_INITIALIZER;
+PFAC_status_t PFAC_tex_mutex_lock( void )
+{
+    int flag = pthread_mutex_lock( &__pfac_tex_mutex);
+    if ( flag ){
+        return PFAC_STATUS_MUTEX_ERROR;
+    }else{
+        return PFAC_STATUS_SUCCESS;
+    }
+}
+
+PFAC_status_t PFAC_tex_mutex_unlock( void )
+{
+    int flag = pthread_mutex_unlock( &__pfac_tex_mutex);
+    if ( flag ){
+        return PFAC_STATUS_MUTEX_ERROR;
+    }else{
+        return PFAC_STATUS_SUCCESS;
+    }
+}
 
 /* This is missing from very old Linux libc. */
 #ifndef RTLD_NOW
@@ -39,10 +67,6 @@ using namespace std ;
 
 /* maximum width for a 1D texture reference bound to linear memory, independent of size of element*/
 #define  MAXIMUM_WIDTH_1DTEX    (1 << 27)
-
-
-//#define DEBUG_MSG
-
 
 PFAC_status_t  PFAC_CPU_OMP(PFAC_handle_t handle, char *input_string, const int input_size, int *h_matched_result );
 PFAC_status_t  PFAC_CPU( PFAC_handle_t handle, char *h_input_string, const int input_size, int *h_matched_result ) ;
@@ -65,9 +89,14 @@ PFAC_status_t  PFAC_createHashTable( PFAC_handle_t handle );
  *
  *  WARNING: initial_state >= k, and size(output_table) >= k
  */
-PFAC_status_t create_PFACTable_spaceDriven(const char** rowPtr, const int *patternLen_table, const int *patternID_table,
+PFAC_status_t create_PFACTable_spaceDriven(
+    const char** rowPtr, 
+    const int *patternLen_table, 
+    const int *patternID_table,
     const int max_state_num,
-    const int pattern_num, const int initial_state, const int baseOfUsableStateID, 
+    const int pattern_num, 
+    const int initial_state, 
+    const int baseOfUsableStateID, 
     int *state_num_ptr,
     vector< vector<TableEle> > &PFAC_table );
 
@@ -124,12 +153,12 @@ PFAC_status_t  PFAC_create( PFAC_handle_t *handle )
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, device);
 
-#ifdef DEBUG_MSG
-    printf("major = %d, minor = %d\n", deviceProp.major, deviceProp.minor );
-#endif
+    PFAC_PRINTF("major = %d, minor = %d, name=%s\n", deviceProp.major, deviceProp.minor, deviceProp.name );
 
     int device_no = 10*deviceProp.major + deviceProp.minor ;
-    if ( 21 == device_no ){
+    if ( 30 == device_no ){
+        strcpy (modulepath, "libpfac_sm30.so");    
+    }else if ( 21 == device_no ){
         strcpy (modulepath, "libpfac_sm21.so");    
     }else if ( 20 == device_no ){
         strcpy (modulepath, "libpfac_sm20.so");
@@ -145,51 +174,39 @@ PFAC_status_t  PFAC_create( PFAC_handle_t *handle )
     
     (*handle)->device_no = device_no ;
     
-#ifdef DEBUG_MSG
-    printf("load module %s \n", modulepath );
-#endif
+    PFAC_PRINTF("load module %s \n", modulepath );
 
     // Load the module.
     module = dlopen (modulepath, RTLD_NOW);
     if (!module){
-#ifdef DEBUG_MSG
-        printf("Error: modulepath(%s) cannot load module\n", modulepath );
-#endif
+        PFAC_PRINTF("Error: modulepath(%s) cannot load module, %s\n", modulepath, dlerror() ); 
         return PFAC_STATUS_LIB_NOT_EXIST ;
     }
 
     // Find entry point of PFAC_kernel
     (*handle)->kernel_time_driven_ptr = (PFAC_kernel_protoType) dlsym (module, "PFAC_kernel_timeDriven_warpper");
     if ( NULL == (*handle)->kernel_time_driven_ptr ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot load PFAC_kernel_timeDriven_warpper, error = %s\n", dlerror() );
-#endif
+        PFAC_PRINTF("Error: cannot load PFAC_kernel_timeDriven_warpper, error = %s\n", dlerror() );
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
     
     (*handle)->kernel_space_driven_ptr = (PFAC_kernel_protoType) dlsym (module, "PFAC_kernel_spaceDriven_warpper");
     if ( NULL == (*handle)->kernel_space_driven_ptr ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot load PFAC_kernel_spaceDriven_warpper, error = %s\n", dlerror() );
-#endif
+        PFAC_PRINTF("Error: cannot load PFAC_kernel_spaceDriven_warpper, error = %s\n", dlerror() );
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
     
     // Find entry point of PFAC_reduce_kernel
     (*handle)->reduce_kernel_ptr = (PFAC_reduce_kernel_protoType) dlsym (module, "PFAC_reduce_kernel");
     if ( NULL == (*handle)->reduce_kernel_ptr ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot load PFAC_reduce_kernel, error = %s\n", dlerror() );
-#endif
+        PFAC_PRINTF("Error: cannot load PFAC_reduce_kernel, error = %s\n", dlerror() );
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
     // Find entry point of PFAC_reduce_inplace_kernel
     (*handle)->reduce_inplace_kernel_ptr = (PFAC_reduce_kernel_protoType) dlsym (module, "PFAC_reduce_inplace_kernel");
     if ( NULL == (*handle)->reduce_inplace_kernel_ptr ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot load PFAC_reduce_inplace_kernel, error = %s\n", dlerror() );
-#endif
+        PFAC_PRINTF("Error: cannot load PFAC_reduce_inplace_kernel, error = %s\n", dlerror() );
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
@@ -326,10 +343,8 @@ PFAC_status_t  PFAC_bindTable( PFAC_handle_t handle )
         PFAC_status = PFAC_createHashTable(handle);
     }
 
-    if ( PFAC_STATUS_SUCCESS != PFAC_status ){
-#ifdef DEBUG_MSG    	
-        printf("Error: cannot create transistion table \n");	
-#endif 
+    if ( PFAC_STATUS_SUCCESS != PFAC_status ){  	
+        PFAC_PRINTF("Error: cannot create transistion table \n");	
         return PFAC_status ;
     }
 
@@ -347,7 +362,7 @@ PFAC_status_t  PFAC_create2DTable( PFAC_handle_t handle )
     if ( NULL != handle->d_PFAC_table ){
         return PFAC_STATUS_SUCCESS ;
     }	
-
+    
     const int numOfStates = handle->numOfStates ;
 
     handle->numOfTableEntry = CHAR_SET*numOfStates ; 
@@ -460,9 +475,8 @@ PFAC_status_t  PFAC_createHashTable( PFAC_handle_t handle )
         }else if ( 255 >= Bi ){ // Si = {12, 13, ..., 255}
             Si = 256 ;	
         }else {
-#ifdef DEBUG_MSG
-            printf("Error: Bi (%d) is out-of-array bound\n", Bi);
-#endif            
+            PFAC_PRINTF("Error: Bi (%d) is out-of-array bound\n", Bi);
+   
             free(handle->h_hashRowPtr);
             handle->h_hashRowPtr = NULL ;
             return PFAC_STATUS_INTERNAL_ERROR ;
@@ -537,9 +551,8 @@ PFAC_status_t  PFAC_createHashTable( PFAC_handle_t handle )
             }
         }
         if ( 0 > ki ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot find a k <= 256 to seperate elements \n");
-#endif  
+            PFAC_PRINTF("Error: cannot find a k <= 256 to seperate elements \n");
+
             free(handle->h_hashRowPtr);
             handle->h_hashRowPtr = NULL ;
             free(handle->h_hashValPtr);
@@ -594,7 +607,10 @@ PFAC_status_t  PFAC_createHashTable( PFAC_handle_t handle )
     cudaError_t cuda_status1 = cudaMalloc((void **) &handle->d_hashRowPtr, sizeof(int2)*numOfStates );
     cudaError_t cuda_status2 = cudaMalloc((void **) &handle->d_hashValPtr, handle->sizeOfTableInBytes );
     cudaError_t cuda_status3 = cudaMalloc((void **) &handle->d_tableOfInitialState, sizeof(int)*CHAR_SET ); 
-    if ( (cudaSuccess != cuda_status1) || (cudaSuccess != cuda_status2) || (cudaSuccess != cuda_status3) ){
+    if ( (cudaSuccess != cuda_status1) || 
+    	   (cudaSuccess != cuda_status2) || 
+    	   (cudaSuccess != cuda_status3) )
+    {
         if (NULL != handle->d_hashRowPtr){
             cudaFree(handle->d_hashRowPtr) ; 
             handle->d_hashRowPtr = NULL ;	
@@ -780,18 +796,17 @@ PFAC_status_t  PFAC_setPerfMode( PFAC_handle_t handle, PFAC_perfMode_t perfModeS
     }
     
     if ( (PFAC_TIME_DRIVEN  != perfModeSel) &&
-    	   (PFAC_SPACE_DRIVEN != perfModeSel)
-    	 ){
+    	 (PFAC_SPACE_DRIVEN != perfModeSel) )
+    {
         return PFAC_STATUS_INVALID_PARAMETER ;
     }
 
     // reset transition table if patterns are ready and user change perfMode
     bool resetTable = false ;
     if ( handle->isPatternsReady ){
-        if ( perfModeSel != handle->perfMode ){
-#ifdef DEBUG_MSG 	
-            printf("reset transition table \n");
-#endif            
+        if ( perfModeSel != handle->perfMode ){ 	
+            PFAC_PRINTF("reset transition table \n");
+
             resetTable = true ;
         }
     }
@@ -813,11 +828,15 @@ PFAC_status_t  PFAC_setPerfMode( PFAC_handle_t handle, PFAC_perfMode_t perfModeS
 
 inline void correctTextureMode(PFAC_handle_t handle)
 {		
+
+    PFAC_PRINTF("handle->textureMode = %d\n",handle->textureMode );	
     /* maximum width for a 1D texture reference is independent of type */
     if ( PFAC_AUTOMATIC == handle->textureMode ){
         if ( handle->numOfTableEntry < MAXIMUM_WIDTH_1DTEX ){ 
+            PFAC_PRINTF("reset to tex on, handle->numOfTableEntry =%d < %d\n",handle->numOfTableEntry, MAXIMUM_WIDTH_1DTEX);         	
             handle->textureMode = PFAC_TEXTURE_ON ;
         }else{
+            PFAC_PRINTF("reset to tex off, handle->numOfTableEntry =%d > %d\n",handle->numOfTableEntry, MAXIMUM_WIDTH_1DTEX); 
             handle->textureMode = PFAC_TEXTURE_OFF ;
         }
     }
@@ -856,13 +875,9 @@ PFAC_status_t  PFAC_matchFromDevice( PFAC_handle_t handle, char *d_input_string,
     PFAC_status_t PFAC_status ;
     
     if ( PFAC_TIME_DRIVEN == handle->perfMode ){
-        
         PFAC_status = (*(handle->kernel_time_driven_ptr))( handle, d_input_string, input_size, d_matched_result );
-    
     }else if ( PFAC_SPACE_DRIVEN == handle->perfMode ){
-    	
         PFAC_status = (*(handle->kernel_space_driven_ptr))( handle, d_input_string, input_size, d_matched_result );
-    
     }else{
         return PFAC_STATUS_INTERNAL_ERROR ;	
     }
@@ -898,22 +913,16 @@ PFAC_status_t  PFAC_matchFromHost( PFAC_handle_t handle, char *h_input_string, s
     }else if ( PFAC_PLATFORM_CPU_OMP == handle->platform){
         char *omp_var_str = getenv( "OMP_NUM_THREADS" ) ;
         if ( NULL == omp_var_str ){
-#ifdef DEBUG_MSG
-            printf("environment variable OMP_NUM_THREADS is missing, call non-openmp version \n");
-#endif
+            PFAC_PRINTF("environment variable OMP_NUM_THREADS is missing, call non-openmp version \n");
             return PFAC_CPU(handle, h_input_string, input_size, h_matched_result);
-
         }else {
-#ifdef DEBUG_MSG
-            printf("environment variable OMP_NUM_THREADS = %s, call openmp version \n", omp_var_str );
-#endif
+            PFAC_PRINTF("environment variable OMP_NUM_THREADS = %s, call openmp version \n", omp_var_str );
             return PFAC_CPU_OMP(handle, h_input_string, input_size, h_matched_result );
        
         }
     }
 
-    // platform is GPU
-    
+    // platform is GPU    
     char *d_input_string  = NULL;
     int *d_matched_result = NULL;
 
@@ -933,8 +942,8 @@ PFAC_status_t  PFAC_matchFromHost( PFAC_handle_t handle, char *h_input_string, s
     // copy input string from host to device
     cuda_status1 = cudaMemcpy(d_input_string, h_input_string, input_size, cudaMemcpyHostToDevice);
     if ( cudaSuccess != cuda_status1 ){
-    	  cudaFree(d_input_string); 
-    	  cudaFree(d_matched_result);
+        cudaFree(d_input_string); 
+        cudaFree(d_matched_result);
         return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
@@ -950,8 +959,8 @@ PFAC_status_t  PFAC_matchFromHost( PFAC_handle_t handle, char *h_input_string, s
     // copy the result data from device to host
     cuda_status1 = cudaMemcpy(h_matched_result, d_matched_result, input_size*sizeof(int), cudaMemcpyDeviceToHost);
     if ( cudaSuccess != cuda_status1 ){
-    	  cudaFree(d_input_string);
-    	  cudaFree(d_matched_result);
+        cudaFree(d_input_string);
+        cudaFree(d_matched_result);
         return PFAC_STATUS_INTERNAL_ERROR;
     }
 
@@ -978,7 +987,7 @@ PFAC_status_t  PFAC_matchFromDeviceReduce( PFAC_handle_t handle, char *d_input_s
         return PFAC_STATUS_INVALID_PARAMETER ;
     }
     if ( NULL == h_num_matched ){
-    	  return PFAC_STATUS_INVALID_PARAMETER ;
+        return PFAC_STATUS_INVALID_PARAMETER ;
     }
     
     if ( 0 == input_size ){ 
@@ -1044,15 +1053,13 @@ PFAC_status_t  PFAC_matchFromHostReduce( PFAC_handle_t handle, char *h_input_str
         }else if ( PFAC_PLATFORM_CPU_OMP == handle->platform){
             char *omp_var_str = getenv( "OMP_NUM_THREADS" ) ;
             if ( NULL == omp_var_str ){
-#ifdef DEBUG_MSG
-                printf("environment variable OMP_NUM_THREADS is missing, call non-openmp version \n");
-#endif
+                PFAC_PRINTF("environment variable OMP_NUM_THREADS is missing, call non-openmp version \n");
+
                 PFAC_status = PFAC_CPU(handle, h_input_string, input_size, h_matched_result ); 
 
             }else {
-#ifdef DEBUG_MSG
-                printf("environment variable OMP_NUM_THREADS = %s, call openmp version \n", omp_var_str );
-#endif
+                PFAC_PRINTF("environment variable OMP_NUM_THREADS = %s, call openmp version \n", omp_var_str );
+
                 PFAC_status = PFAC_CPU_OMP(handle, h_input_string, input_size, h_matched_result );
 
             } 
@@ -1085,9 +1092,9 @@ PFAC_status_t  PFAC_matchFromHostReduce( PFAC_handle_t handle, char *h_input_str
     cudaError_t cuda_status2 = cudaMalloc((void **) &d_matched_result, input_size*sizeof(int) );
     cudaError_t cuda_status3 = cudaMalloc((void **) &d_pos, input_size*sizeof(int) );
     if ( (cudaSuccess != cuda_status1) || (cudaSuccess != cuda_status2) || (cudaSuccess != cuda_status3) ){
-    	  if ( NULL != d_input_string   ) { cudaFree(d_input_string); }
-    	  if ( NULL != d_matched_result ) { cudaFree(d_matched_result); }
-    	  if ( NULL != d_pos ) { cudaFree(d_pos); }
+        if ( NULL != d_input_string   ) { cudaFree(d_input_string); }
+        if ( NULL != d_matched_result ) { cudaFree(d_matched_result); }
+        if ( NULL != d_pos ) { cudaFree(d_pos); }
         return PFAC_STATUS_CUDA_ALLOC_FAILED;
     }
 
@@ -1102,14 +1109,12 @@ PFAC_status_t  PFAC_matchFromHostReduce( PFAC_handle_t handle, char *h_input_str
 
     correctTextureMode(handle) ;
      
-    if ( PFAC_TIME_DRIVEN == handle->perfMode ){
-        
+    if ( PFAC_TIME_DRIVEN == handle->perfMode ){        
         PFAC_status = (*(handle->reduce_kernel_ptr))( 
             handle, (int*)d_input_string, input_size,
             d_matched_result,  d_pos,  h_num_matched, h_matched_result, h_pos );
             
-    }else if ( PFAC_SPACE_DRIVEN == handle->perfMode ){
-    	    
+    }else if ( PFAC_SPACE_DRIVEN == handle->perfMode ){    	    
         PFAC_status = (*(handle->reduce_inplace_kernel_ptr))( 
             handle, (int*)d_input_string, input_size,
             d_matched_result,  d_pos,  h_num_matched, h_matched_result, h_pos );    	
@@ -1144,6 +1149,7 @@ const char* PFAC_getErrorString( PFAC_status_t status )
     static char PFAC_file_open_error_str[] = "PFAC_STATUS_FILE_OPEN_ERROR: pattern file does not exist" ;
     static char PFAC_lib_not_exist_str[] = "PFAC_STATUS_LIB_NOT_EXIST: cannot find PFAC library, please check LD_LIBRARY_PATH" ;
     static char PFAC_arch_mismatch_str[] = "PFAC_STATUS_ARCH_MISMATCH: sm1.0 is not supported" ;
+    static char PFAC_mutex_error[] = "PFAC_STATUS_MUTEX_ERROR: please report bugs. Workaround: choose non-texture mode.";
     static char PFAC_internal_error_str[] = "PFAC_STATUS_INTERNAL_ERROR: please report bugs" ;
 
     if ( PFAC_STATUS_SUCCESS == status ){
@@ -1178,6 +1184,9 @@ const char* PFAC_getErrorString( PFAC_status_t status )
     case PFAC_STATUS_ARCH_MISMATCH:
         return PFAC_arch_mismatch_str ;
         break ;
+    case PFAC_STATUS_MUTEX_ERROR:
+        return PFAC_mutex_error ;
+        break;
     default : // PFAC_STATUS_INTERNAL_ERROR:
         return PFAC_internal_error_str ;
     }

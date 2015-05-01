@@ -21,47 +21,55 @@
 #include <assert.h>
 #include <ctype.h>
 #include <vector>
+#include <algorithm>
 
 using namespace std ;
 
 #include "../include/PFAC_P.h"
 
-//#define DEBUG_MSG
-
 #define  PFAC_TABLE_MAP( i , j )   (i)*CHAR_SET + (j)
 
+struct patternEle{
+    char *patternString;
+    int patternID;
+};
 
- // pattern s and t are terminated by character '\n'
-int  pattern_cmp( const char**s, const char **t )
-{
-    char s_char, t_char ;
-    bool s_end, t_end ;
-    char *s_sweep = (char*) *s ;
-    char *t_sweep = (char*) *t ;
+struct pattern_cmp_functor{
 
-    while(1){
-        s_char = *s_sweep++ ;
-        t_char = *t_sweep++ ;
-        s_end = ('\n' == s_char) ;
-        t_end = ('\n' == t_char) ;
+    // pattern *s and *t are terminated by character '\n'
+    // strict weak ordering
+    // return true if the first argument goes before the second argument
+    bool operator()( patternEle pattern_s, patternEle pattern_t ){
+        char s_char, t_char ;
+        bool s_end, t_end ;
+        char *s_sweep = pattern_s.patternString;
+        char *t_sweep = pattern_t.patternString;
 
-        if ( s_end || t_end ){ break ; }
+        while(1){
+            s_char = *s_sweep++ ;
+            t_char = *t_sweep++ ;
+            s_end = ('\n' == s_char) ;
+            t_end = ('\n' == t_char) ;
 
-        if (s_char < t_char){
-            return -1 ;
-        }else if ( s_char > t_char ){
-            return  1 ;
+            if ( s_end || t_end ){ break ; }
+
+            if (s_char < t_char){
+                return true ;
+            }else if ( s_char > t_char ){
+                return false ;
+            }
+        }
+
+        if ( s_end == t_end ){ // pattern s is the same as pattern t, the order is don't care
+            return true ;
+        }else if ( s_end ){ // pattern s is prefix of pattern t
+            return true ;
+        }else{
+            return false ; // pattern t is prefix of pattern s
         }
     }
 
-    if ( s_end == t_end ){
-        return 0 ;
-    }else if ( s_end ){
-        return  -1 ;
-    }else{
-        return  1 ;
-    }
-}
+} ; 
 
 /*
 void printStringEndNewLine( char *s, FILE* fp )
@@ -81,6 +89,7 @@ void printStringEndNewLine( char *s, FILE* fp )
 }
 */
 
+
 void printString( char *s, const int n, FILE* fp )
 {
     fprintf(fp,"%c", '\"');
@@ -94,6 +103,8 @@ void printString( char *s, const int n, FILE* fp )
     }
     fprintf(fp,"%c", '\"');
 }
+
+
 
 /*
  *  parse pattern file "patternFileName",
@@ -135,9 +146,7 @@ PFAC_status_t parsePatternFile( char *patternfilename,
 
     FILE* fpin = fopen(patternfilename, "rb");
     if (fpin == NULL) {
-#ifdef DEBUG_MSG
-        fprintf(stderr, "Error: Open pattern file %s failed.", patternfilename );
-#endif
+        PFAC_PRINTF("Error: Open pattern file %s failed.", patternfilename );
         return PFAC_STATUS_FILE_OPEN_ERROR ;
     }
 
@@ -158,49 +167,55 @@ PFAC_status_t parsePatternFile( char *patternfilename,
     fclose(fpin);
 
     char *buffer = *valPtr ;
-    vector<char*> rowIdxArray ;
-    vector<int>   patternLenArray ;
+    vector< struct patternEle > rowIdxArray ;
+    vector<int>  patternLenArray ;
     int len ;
 
-    rowIdxArray.push_back( buffer ) ;
+    struct patternEle pEle;
+
+    pEle.patternString = buffer ;
+    pEle.patternID = 1 ;
+ 
+    rowIdxArray.push_back(pEle) ;
     len = 0 ;
     for( int i = 0 ; i < file_size ; i++){
         if ( '\n' == buffer[i] ){
-            if ( i > 0 && '\n' != buffer[i-1] ){ // non-empty line
-                patternLenArray.push_back( len ) ;
-#ifdef DEBUG_MSG
-                printStringEndNewLine( rowIdxArray.back() );
-                printf(" ,length = %d\n", len );
-#endif
-                rowIdxArray.push_back( buffer + i + 1) ;
+            if ( (i > 0) && ('\n' != buffer[i-1]) ){ // non-empty line
+                patternLenArray.push_back(len);
+                pEle.patternString = buffer + i + 1; // start of next pattern
+                pEle.patternID = rowIdxArray.size()+1; // ID of next pattern
+                rowIdxArray.push_back(pEle) ;
             }
             len = 0 ;
         }else{
             len++ ;
         }
     }
+
+    *pattern_num_ptr = rowIdxArray.size() - 1 ;
+    *max_state_num_ptr = file_size + 1 ;
+
     // rowIdxArray.size()-1 = number of patterns
+    // sort patterns by lexicographic order
+    sort(rowIdxArray.begin(), rowIdxArray.begin()+*pattern_num_ptr, pattern_cmp_functor() ) ;
 
     *rowPtr = (char**) malloc( sizeof(char*)*rowIdxArray.size() ) ;
-    if ( NULL == *rowPtr ){
-        return PFAC_STATUS_ALLOC_FAILED ;
-    }
-
     *patternID_table_ptr = (int*) malloc( sizeof(int)*rowIdxArray.size() ) ;
-    if ( NULL == *patternID_table_ptr ){
-        return PFAC_STATUS_ALLOC_FAILED ;
-    }
-
     // suppose there are k patterns, then size of patternLen_table is k+1
     // because patternLen_table[0] is useless, valid data starts from
     // patternLen_table[1], up to patternLen_table[k]
     *patternLen_table_ptr = (int*) malloc( sizeof(int)*rowIdxArray.size() ) ;
-    if ( NULL == *patternLen_table_ptr ){
+    if ( ( NULL == *rowPtr ) ||
+         ( NULL == *patternID_table_ptr ) ||
+         ( NULL == *patternLen_table_ptr ) )
+    {
         return PFAC_STATUS_ALLOC_FAILED ;
     }
 
-    for( int i = 0 ; i < rowIdxArray.size() ; i++){
-        (*rowPtr)[i] = rowIdxArray[i] ;
+    // step 5: compute f(final state) = patternID
+    for( int i = 0 ; i < (rowIdxArray.size()-1) ; i++){
+        (*rowPtr)[i] = rowIdxArray[i].patternString ;
+        (*patternID_table_ptr)[i] = rowIdxArray[i].patternID ; // pattern number starts from 1
     }
 
     // although patternLen_table[0] is useless, in order to avoid errors from valgrind
@@ -210,25 +225,6 @@ PFAC_status_t parsePatternFile( char *patternfilename,
         // pattern (*rowPtr)[i] is terminated by character '\n'
         // pattern ID starts from 1, so patternID = i+1
         (*patternLen_table_ptr)[i+1] = patternLenArray[i] ;
-    }
-
-    // step 4: sort patterns by lexicographic order
-    qsort( *rowPtr, rowIdxArray.size()-1, sizeof(char*),
-        (int (*)(const void*, const void*)) pattern_cmp ) ;
-
-    *max_state_num_ptr = file_size + 1 ;
-    *pattern_num_ptr = rowIdxArray.size() - 1 ;
-
-    // step 5: compute f(final state) = patternID
-    for( int i = 0 ; i < *pattern_num_ptr ; i++){
-        char *key = (*rowPtr)[i];
-        // find patterns whose pointer is the same as "key"
-        for( int j = 0 ; j < *pattern_num_ptr ; j++){
-            if ( key == rowIdxArray[j] ){
-                (*patternID_table_ptr)[i] = j + 1 ; // pattern number starts from 1
-                break ;
-            }
-        }
     }
 
     return PFAC_STATUS_SUCCESS ;
@@ -273,9 +269,7 @@ PFAC_status_t create_PFACTable_spaceDriven(const char** rowPtr, const int *patte
         PFAC_table.push_back( empty_row );
     }
     
-#ifdef DEBUG_MSG
-    printf("initial state : %d\n", initial_state);
-#endif
+    PFAC_PRINTF("initial state : %d\n", initial_state);
 
     state = initial_state; // state is current state
     //state_num = initial_state + 1; // state_num: usable state
@@ -286,11 +280,11 @@ PFAC_status_t create_PFACTable_spaceDriven(const char** rowPtr, const int *patte
         int  patternID = patternID_table[p_idx];
         int  len = patternLen_table[patternID] ;
 
-#ifdef DEBUG_MSG
+/*
         printf("pid = %d, length = %d, ", patternID, len );
         printStringEndNewLine( pos, stdout );
         printf("\n");
-#endif
+*/
 
         for( int offset = 0 ; offset < len  ; offset++ ){
             int ch = (unsigned char) pos[offset];
@@ -321,18 +315,14 @@ PFAC_status_t create_PFACTable_spaceDriven(const char** rowPtr, const int *patte
             }
 
             if (state_num > max_state_num) {
-#ifdef DEBUG_MSG
-                printf("Error: State number overflow, state no=%d, max_state_num=%d\n",
-                    state_num, max_state_num );
-#endif
+                PFAC_PRINTF("Error: State number overflow, state no=%d, max_state_num=%d\n", state_num, max_state_num );
                 return PFAC_STATUS_INTERNAL_ERROR ;
             }
         }  // while
     }  // for each pattern
 
-#ifdef DEBUG_MSG
-    printf("The number of state is %d\n", state_num);
-#endif
+    PFAC_PRINTF("The number of state is %d\n", state_num);
+
     *state_num_ptr = state_num ;
 
     return PFAC_STATUS_SUCCESS ;

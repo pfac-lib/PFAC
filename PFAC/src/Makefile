@@ -44,22 +44,27 @@ CPP_OBJ = $(patsubst %.cpp,%.o,$(CPP_SRC))
 
 cppobj_loc = $(patsubst %.o,$(OBJ_DIR)/%.o,$(CPP_OBJ))
 
+cppobj_fpic_loc = $(patsubst %.o,$(OBJ_DIR)/%_fpic.o,$(CPP_OBJ))
+
 
 cu_cpp_sm20_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm20_%.cpp,$(CU_CPP))
 cu_cpp_sm13_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm13_%.cpp,$(CU_CPP))
 cu_cpp_sm12_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm12_%.cpp,$(CU_CPP))
 cu_cpp_sm11_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm11_%.cpp,$(CU_CPP))
 
+cu_cpp_obj_sm30_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm30_%.cpp.o,$(CU_CPP))
 cu_cpp_obj_sm21_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp.o,$(CU_CPP))
 cu_cpp_obj_sm20_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm20_%.cpp.o,$(CU_CPP))
 cu_cpp_obj_sm13_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm13_%.cpp.o,$(CU_CPP))
 cu_cpp_obj_sm12_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm12_%.cpp.o,$(CU_CPP))
 cu_cpp_obj_sm11_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm11_%.cpp.o,$(CU_CPP))
 
-all: mk_libso_no21 mk_libso_21  mk_liba   
+all: mk_libso_no21 mk_libso_21 mk_libso_30  mk_lib_fpic 
 
+sm30_command := $(if $(sm_30_support),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm30.so $(LIBS) $(cu_cpp_obj_sm30_loc),)
 sm21_command := $(if $(sm_21_support),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm21.so $(LIBS) $(cu_cpp_obj_sm21_loc),)
 
+cu_cpp_sm30_loc := $(if $(sm_30_support),$(patsubst %.cpp,$(OBJ_DIR)/sm30_%.cpp,$(CU_CPP)),)
 cu_cpp_sm21_loc := $(if $(sm_21_support),$(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp,$(CU_CPP)),)
 
 
@@ -69,6 +74,9 @@ mk_libso_no21: $(cu_cpp_sm20_loc) $(cu_cpp_sm13_loc) $(cu_cpp_sm12_loc) $(cu_cpp
 	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm12.so $(LIBS) $(cu_cpp_obj_sm12_loc)
 	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm11.so $(LIBS) $(cu_cpp_obj_sm11_loc)
 
+mk_libso_30: $(cu_cpp_sm30_loc)
+	$(sm30_command)  
+
 mk_libso_21: $(cu_cpp_sm21_loc)
 	$(sm21_command)  
 
@@ -76,9 +84,15 @@ mk_liba: $(cppobj_loc)
 	ar cru $(LIB_DIR)/libpfac.a  $(cppobj_loc)
 	ranlib $(LIB_DIR)/libpfac.a
 
-#%.o: src/%.cpp
-#	$(CXX) -c -DFERMI_SUPPORT $(CXXFLAGS) $(INCPATH) -o $(OBJ_DIR)/sm20_$@ $<
-#	$(CXX) -c $(CXXFLAGS) $(INCPATH) -o $(OBJ_DIR)/sm13_$@ $<
+mk_lib_fpic: $(cppobj_fpic_loc)
+	$(CXX) -shared -o $(LIB_DIR)/libpfac.so  $(cppobj_fpic_loc) $(LIBS)
+
+
+$(OBJ_DIR)/%_fpic.o: %.cpp  $(inc_files)
+	$(CXX) -fPIC -c $(CXXFLAGS) $(INCPATH) -o $@ $<
+
+$(OBJ_DIR)/PFAC_CPU_OMP_reorder_fpic.o: PFAC_CPU_OMP_reorder.cpp  $(inc_files)
+	$(CXX) -fPIC -c $(CXXFLAGS) $(INCPATH) -o $@ $<
 
 $(OBJ_DIR)/PFAC_CPU_OMP_reorder.o: PFAC_CPU_OMP_reorder.cpp  $(inc_files)
 	$(CXX) -c $(CXXFLAGS) $(INCPATH) -o $@ $<
@@ -86,12 +100,17 @@ $(OBJ_DIR)/PFAC_CPU_OMP_reorder.o: PFAC_CPU_OMP_reorder.cpp  $(inc_files)
 $(OBJ_DIR)/%.o: %.cpp  $(inc_files)
 	$(CXX) -c $(CXXFLAGS) $(INCPATH) -o $@ $<
 
+
+$(OBJ_DIR)/sm30_%.cu.cpp: %.cu
+	$(NVCC) -arch=sm_30 -cuda $(INCPATH) -o $@ $<
+	$(CXX) -fPIC -O2 -c -o $@.o $@
+
 $(OBJ_DIR)/sm21_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_21 -cuda -DFERMI_SUPPORT $(INCPATH) -o $@ $<
+	$(NVCC) -arch=sm_21 -cuda $(INCPATH) -o $@ $<
 	$(CXX) -fPIC -O2 -c -o $@.o $@
 
 $(OBJ_DIR)/sm20_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_20 -cuda -DFERMI_SUPPORT $(INCPATH) -o $@ $<
+	$(NVCC) -arch=sm_20 -cuda $(INCPATH) -o $@ $<
 	$(CXX) -fPIC -O2 -c -o $@.o $@
 
 $(OBJ_DIR)/sm13_%.cu.cpp: %.cu

@@ -60,7 +60,8 @@ words := $(shell nvcc -V | grep tools)
 nvcc_v_comma := $(filter-out Cuda compilation tools% release V%, $(words))
 comma := ,
 nvcc_version := $(subst $(comma),,$(nvcc_v_comma))
-sm_21_support := $(if $(filter $(nvcc_version), 3.2 4.0),1,)
+sm_21_support := $(if $(filter $(nvcc_version), 3.2 4.0 4.1 4.2),1,)
+sm_30_support := $(if $(filter $(nvcc_version), 4.2),1,)
 
 
 #

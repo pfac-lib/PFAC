@@ -20,8 +20,8 @@ exe_files = $(patsubst %,%.exe,$(TARGET))
 all: $(exe_files)
  
 %.exe: $(OBJ_DIR)/%.o
-	$(LINK) -o $(EXE_DIR)/$@ $< $(LIB_DIR)/libpfac.a $(LIBS) 
-       
+	$(LINK) -o $(EXE_DIR)/$@ $< -L$(LIB_DIR) -lpfac $(LIBS)
+
 ####### Build rules
 
 $(OBJ_DIR)/%.o: %.cpp

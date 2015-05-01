@@ -45,10 +45,9 @@
 #include <cuda_runtime.h>
 #include <assert.h>
 #include <ctype.h>
+#include <stdarg.h>
 
 #include "../include/PFAC_P.h"
-
-//#define DEBUG_MSG
 
 #ifdef __cplusplus
 extern "C" {
@@ -75,17 +74,27 @@ static __inline__  __device__ int tex_lookup(int state, int inputChar)
 }
 
 template <int BLOCKSIZE, int EXTRA_SIZE_TB, int TEXTURE_ON , int SMEM_ON >
-__global__ void PFAC_kernel_timeDriven(int *d_PFAC_table, int *d_input_string, int input_size,
-    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
+__global__ void PFAC_kernel_timeDriven(
+    int *d_PFAC_table, 
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
     int *d_match_result );
    
 //------------------- main function -----------------------
 
 /* time-driven kernel */
-__host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, char *d_input_string, size_t input_size,
+__host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( 
+    PFAC_handle_t handle, 
+    char *d_input_string, 
+    size_t input_size,
     int *d_matched_result )
 {
     cudaError_t cuda_status ;
+    PFAC_status_t pfac_status = PFAC_STATUS_SUCCESS;
 
     int num_finalState = handle->numOfFinalStates;
     int initial_state  = handle->initial_state;
@@ -100,13 +109,19 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, c
     
     bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
 
+    PFAC_PRINTF("texture on = %d\n", texture_on);
+
     if ( texture_on ){
-   
+        
+        // #### lock mutex, only one thread can bind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){ 
+            return pfac_status ;
+        } 
+
         textureReference *texRefTable ;
         cudaGetTextureReference( (const struct textureReference**)&texRefTable, "tex_PFAC_table" );
-
         cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<int>();
-    
         // set texture parameters
         tex_PFAC_table.addressMode[0] = cudaAddressModeClamp;
         tex_PFAC_table.addressMode[1] = cudaAddressModeClamp;
@@ -115,11 +130,17 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, c
         
         size_t offset ;
         cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTable,
-            (const void*) handle->d_PFAC_table, (const struct cudaChannelFormatDesc*) &channelDesc, handle->sizeOfTableInBytes ) ;
+            (const void*) handle->d_PFAC_table, (const struct cudaChannelFormatDesc*) &channelDesc, 
+            handle->sizeOfTableInBytes ) ;
+
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){ 
+            return pfac_status ;
+        }
+
         if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture, %s\n", cudaGetErrorString(status) );
-#endif            
+            PFAC_PRINTF("Error: cannot bind texture, %d bytes %s\n", handle->sizeOfTableInBytes, cudaGetErrorString(cuda_status) );
             return PFAC_STATUS_CUDA_ALLOC_FAILED ;
         }
         
@@ -128,9 +149,7 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, c
         *   is multiple of 256 byte, so offset must be zero.  
         */
         if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
+            PFAC_PRINTF("Error: offset is not zero\n");
             return PFAC_STATUS_INTERNAL_ERROR ;
         }
     }
@@ -168,20 +187,32 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, c
 
     if (smem_on) {
         if ( texture_on ){
+
+            PFAC_PRINTF("PFAC_kernel_timeDriven, tex on, smem on\n");       
+        
             PFAC_kernel_timeDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 1, 1> <<< dimGrid, dimBlock >>>(
                 handle->d_PFAC_table, (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );   
         }else{
+        
+            PFAC_PRINTF("PFAC_kernel_timeDriven, tex off, smem on\n");    
+        
             PFAC_kernel_timeDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 0, 1> <<< dimGrid, dimBlock >>>(
                 handle->d_PFAC_table, (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );           
         }
     }else{
         if ( texture_on ){
+
+            PFAC_PRINTF("PFAC_kernel_timeDriven, tex on, smem off\n");    
+
             PFAC_kernel_timeDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 1, 0> <<< dimGrid, dimBlock >>>(
                 handle->d_PFAC_table, (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );   
         }else{
+
+            PFAC_PRINTF("PFAC_kernel_timeDriven, tex off, smem off\n");            
+
             PFAC_kernel_timeDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 0, 0> <<< dimGrid, dimBlock >>>(
                 handle->d_PFAC_table, (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );   
@@ -189,14 +220,25 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper( PFAC_handle_t handle, c
     }
 
     cuda_status = cudaGetLastError() ;
-    if ( cudaSuccess != cuda_status ){
-        if ( texture_on ) { cudaUnbindTexture(tex_PFAC_table); }
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
 
     if ( texture_on ){
+        // #### lock mutex, only one thread can unbind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){ 
+            return pfac_status ;
+        }
         cudaUnbindTexture(tex_PFAC_table);
+        
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){ 
+            return pfac_status ;
+        }
     } 
+
+    if ( cudaSuccess != cuda_status ){
+        return PFAC_STATUS_INTERNAL_ERROR ;
+    }
 
     return PFAC_STATUS_SUCCESS ;
 }

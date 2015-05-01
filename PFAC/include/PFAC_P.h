@@ -23,6 +23,14 @@ using namespace std ;
 
 #include "PFAC.h"
 
+/*
+ * debug mode:  PFAC_PRINTF( ... ) printf( __VA_ARGS__ )
+ * release mode:  PFAC_PRINTF( ... ) 
+ */
+//#define PFAC_PRINTF( ... ) printf( __VA_ARGS__ )
+//#define PFAC_PRINTF printf
+#define PFAC_PRINTF(...) 
+
 #define  FILENAME_LEN    256
 
 
@@ -204,6 +212,18 @@ void printString( char *s, const int n, FILE* fp );
 
 
 PFAC_status_t  PFAC_memoryUsage( PFAC_handle_t handle );
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif   // __cplusplus
+PFAC_status_t PFAC_tex_mutex_lock( void );
+
+PFAC_status_t PFAC_tex_mutex_unlock( void );
+
+#ifdef __cplusplus
+}
+#endif   // __cplusplus
 
 #endif   // PFAC_P_H_
 

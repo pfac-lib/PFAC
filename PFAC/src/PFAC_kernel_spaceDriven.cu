@@ -27,7 +27,6 @@
 
 #include "../include/PFAC_P.h"
 
-//#define DEBUG_MSG
 
 #ifdef __cplusplus
 extern "C" {
@@ -131,22 +130,31 @@ static __inline__  __device__ int tex_loadTableOfInitialState(int ch)
 
 
 template <int BLOCKSIZE, int EXTRA_SIZE_TB, int TEXTURE_ON , int SMEM_ON >
-__global__ void PFAC_kernel_spaceDriven(int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
-    const int hash_m, const int hash_p,
-    int *d_input_string, int input_size,
-    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
+__global__ void PFAC_kernel_spaceDriven(
+    int2 *d_hashRowPtr, 
+    int2 *d_hashValPtr,
+    int *d_tableOfInitialState,
+    const int hash_m, 
+    const int hash_p,
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
     int *d_match_result );
     
 //------------------- main function -----------------------
 
 __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper( 
-    PFAC_handle_t handle, char *d_input_string, size_t input_size,
+    PFAC_handle_t handle, 
+    char *d_input_string, 
+    size_t input_size,
     int *d_matched_result )
 {
+    PFAC_status_t pfac_status = PFAC_STATUS_SUCCESS ;
 
-#ifdef DEBUG_MSG
-    printf("call PFAC_kernel_spaceDriven_warpper \n");
-#endif
+    PFAC_PRINTF("call PFAC_kernel_spaceDriven_warpper \n");
 
     cudaError_t cuda_status ;
 
@@ -163,74 +171,48 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
     
     bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
 
-    size_t offset ;
-    
-    /* always bind texture to tex_tableOfInitialState */
-    // (3) bind texture to tex_tableOfInitialState
-    textureReference *texRefTableOfInitialState ;
-    cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState" );
-
-    cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
-    // set texture parameters
-    tex_tableOfInitialState.addressMode[0] = cudaAddressModeClamp;
-    tex_tableOfInitialState.addressMode[1] = cudaAddressModeClamp;
-    tex_tableOfInitialState.filterMode     = cudaFilterModePoint;
-    tex_tableOfInitialState.normalized     = 0;    
-        
-    cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTableOfInitialState,
-        (const void*) handle->d_tableOfInitialState, (const struct cudaChannelFormatDesc*) &channelDesc_tableOfInitialState, 
-        sizeof(int)*CHAR_SET ) ;
-
-    if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-        printf("Error: cannot bind texture to tableOfInitialState, %s\n", cudaGetErrorString(status) );
-#endif            
-        return PFAC_STATUS_CUDA_ALLOC_FAILED ;
-    }
-        
-    if ( 0 != offset ){
-#ifdef DEBUG_MSG
-        printf("Error: offset is not zero\n");
-#endif
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
-        
     if ( texture_on ){
- 
-        // (1) bind texture to tex_hashRowPtr
+
+        cudaError_t cuda_status1, cuda_status2, cuda_status3 ;
+        size_t offset1, offset2, offset3 ;
+
+        // #### lock mutex, only one thread can bind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+
+        // (1) bind texture to tex_tableOfInitialState
+        textureReference *texRefTableOfInitialState ;
+        cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState" );
+        cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
+        // set texture parameters
+        tex_tableOfInitialState.addressMode[0] = cudaAddressModeClamp;
+        tex_tableOfInitialState.addressMode[1] = cudaAddressModeClamp;
+        tex_tableOfInitialState.filterMode     = cudaFilterModePoint;
+        tex_tableOfInitialState.normalized     = 0;    
+        
+        cuda_status1 = cudaBindTexture( &offset1, (const struct textureReference*) texRefTableOfInitialState,
+            (const void*) handle->d_tableOfInitialState, (const struct cudaChannelFormatDesc*) &channelDesc_tableOfInitialState, 
+            sizeof(int)*CHAR_SET ) ;
+       
+        // (2) bind texture to tex_hashRowPtr
         textureReference *texRefHashRowPtr ;
         cudaGetTextureReference( (const struct textureReference**)&texRefHashRowPtr, "tex_hashRowPtr" );
-
         cudaChannelFormatDesc channelDesc_hashRowPtr = cudaCreateChannelDesc<int2>();
-    
         // set texture parameters
         tex_hashRowPtr.addressMode[0] = cudaAddressModeClamp;
         tex_hashRowPtr.addressMode[1] = cudaAddressModeClamp;
         tex_hashRowPtr.filterMode     = cudaFilterModePoint;
         tex_hashRowPtr.normalized     = 0;
         
-        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashRowPtr,
+        cuda_status2 = cudaBindTexture( &offset2, (const struct textureReference*) texRefHashRowPtr,
             (const void*) handle->d_hashRowPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashRowPtr, 
             sizeof(int2)*(handle->numOfStates) ) ;
-        
-        if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture to hashRowPtr, %s\n", cudaGetErrorString(status) );
-#endif            
-            return PFAC_STATUS_CUDA_ALLOC_FAILED ;
-        }
-        
-        if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
-            return PFAC_STATUS_INTERNAL_ERROR ;
-        }
-        
-        // (2) bind texture to tex_hashValPtr
+          
+        // (3) bind texture to tex_hashValPtr
         textureReference *texRefHashValPtr ;
         cudaGetTextureReference( (const struct textureReference**)&texRefHashValPtr, "tex_hashValPtr" );
-
         cudaChannelFormatDesc channelDesc_hashValPtr = cudaCreateChannelDesc<int2>();        
         // set texture parameters
         tex_hashValPtr.addressMode[0] = cudaAddressModeClamp;
@@ -238,22 +220,31 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
         tex_hashValPtr.filterMode     = cudaFilterModePoint;
         tex_hashValPtr.normalized     = 0;
 
-        cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefHashValPtr,
+        cuda_status3 = cudaBindTexture( &offset3, (const struct textureReference*) texRefHashValPtr,
             (const void*) handle->d_hashValPtr, (const struct cudaChannelFormatDesc*) &channelDesc_hashValPtr, 
             handle->sizeOfTableInBytes ) ;
-        if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture to hashValPtr, %s\n", cudaGetErrorString(status) );
-#endif            
+
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }            
+            
+        if ( (cudaSuccess != cuda_status1) ||
+             (cudaSuccess != cuda_status2) ||
+             (cudaSuccess != cuda_status3) )
+        {
+            PFAC_PRINTF("Error: cannot bind texture to texRefTableOfInitialState, hashRowPtr, hashValPtr\n" );
             return PFAC_STATUS_CUDA_ALLOC_FAILED ;
         }
         
-        if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
+        if ( (0 != offset1) ||
+             (0 != offset2) ||
+             (0 != offset3) )
+        {
             return PFAC_STATUS_INTERNAL_ERROR ;
-        }                                            
+        }
+  
     }
 
     // n_hat = number of integers of input string
@@ -289,12 +280,18 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
    
     if (smem_on) {
         if ( texture_on ){
+
+            PFAC_PRINTF("PFAC_kernel_spaceDriven, tex on, smem on\n");        
+        
             PFAC_kernel_spaceDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 1, 1> <<< dimGrid, dimBlock >>>(
                 handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState, 
                 handle->hash_m, handle->hash_p,
                 (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );   
         }else{
+        
+            PFAC_PRINTF("PFAC_kernel_spaceDriven, tex off, smem on\n");        
+        
             PFAC_kernel_spaceDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 0, 1> <<< dimGrid, dimBlock >>>(
                 handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
                 handle->hash_m, handle->hash_p,
@@ -303,12 +300,18 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
         }
     }else{
         if ( texture_on ){
+
+            PFAC_PRINTF("PFAC_kernel_spaceDriven, tex on, smem off\n");        
+        
             PFAC_kernel_spaceDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 1, 0> <<< dimGrid, dimBlock >>>(
                 handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
                 handle->hash_m, handle->hash_p,
                 (int*)d_input_string, input_size, 
                 n_hat, num_finalState, initial_state, num_blocks-1, d_matched_result );   
         }else{
+
+            PFAC_PRINTF("PFAC_kernel_spaceDriven, tex off, smem off\n");        
+        
             PFAC_kernel_spaceDriven<THREAD_BLOCK_SIZE, EXTRA_SIZE_PER_TB, 0, 0> <<< dimGrid, dimBlock >>>(
                 handle->d_hashRowPtr, handle->d_hashValPtr, handle->d_tableOfInitialState,
                 handle->hash_m, handle->hash_p,
@@ -318,20 +321,28 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
     }
 
     cuda_status = cudaGetLastError() ;
-    if ( cudaSuccess != cuda_status ){
-        cudaUnbindTexture(tex_tableOfInitialState);
-        if ( texture_on ) { 
-            cudaUnbindTexture(tex_hashRowPtr);
-            cudaUnbindTexture(tex_hashValPtr);
-        }
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
 
-    cudaUnbindTexture(tex_tableOfInitialState);
     if ( texture_on ){
+        // #### lock mutex, only one thread can unbind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+
+        cudaUnbindTexture(tex_tableOfInitialState);
         cudaUnbindTexture(tex_hashRowPtr);
         cudaUnbindTexture(tex_hashValPtr);
+
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
     } 
+
+    if ( cudaSuccess != cuda_status ){
+        return PFAC_STATUS_INTERNAL_ERROR ;
+    }
 
     return PFAC_STATUS_SUCCESS ;
 }
@@ -452,10 +463,18 @@ __host__  PFAC_status_t  PFAC_kernel_spaceDriven_warpper(
  *
  */
 template <int BLOCKSIZE, int EXTRA_SIZE_TB, int TEXTURE_ON , int SMEM_ON >
-__global__ void PFAC_kernel_spaceDriven(int2 *d_hashRowPtr, int2 *d_hashValPtr, int *d_tableOfInitialState,
-    const int hash_m, const int hash_p,
-    int *d_input_string, int input_size,
-    int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
+__global__ void PFAC_kernel_spaceDriven(
+    int2 *d_hashRowPtr, 
+    int2 *d_hashValPtr, 
+    int *d_tableOfInitialState,
+    const int hash_m, 
+    const int hash_p,
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
     int *d_match_result )
 {
     int tid  = threadIdx.x ;
@@ -477,8 +496,12 @@ __global__ void PFAC_kernel_spaceDriven(int2 *d_hashRowPtr, int2 *d_hashValPtr, 
     // load transition table of initial state to shared memory
     // we always bind table of initial state to texture
     
-    phi_s02s1[ tid ] = tex_loadTableOfInitialState(tid); // tex_lookup(initial_state, tid); 
-    
+    if ( TEXTURE_ON ){
+        phi_s02s1[ tid ] = tex_loadTableOfInitialState(tid); // tex_lookup(initial_state, tid); 
+    }else{
+        phi_s02s1[ tid ] = d_tableOfInitialState[tid];  
+    }
+
     if ( SMEM_ON ){      
     
         s_char = (unsigned char *)s_input;
@@ -491,7 +514,7 @@ __global__ void PFAC_kernel_spaceDriven(int2 *d_hashRowPtr, int2 *d_hashValPtr, 
         if ( (start < n_hat) && (tid < EXTRA_SIZE_TB) ){
             s_input[tid+BLOCKSIZE] = d_input_string[start];
         }
-    }// if SMEM_ON
+    }
     
     __syncthreads(); // important because of phi_s02s1
     

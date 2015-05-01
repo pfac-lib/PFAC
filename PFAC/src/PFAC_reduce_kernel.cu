@@ -35,8 +35,6 @@
 
 #include "../include/PFAC_P.h"
 
-//#define DEBUG_MSG
-
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,20 +70,45 @@ static __inline__  __device__ int tex_lookup(int state, int inputChar)
     return  tex1Dfetch(tex_PFAC_table_reduce, state*CHAR_SET + inputChar);
 }
 
+
+/* declaration */
 template <int TEXTURE_ON , int SMEM_ON >
-__global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string, 
-    int input_size, int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
-    int *d_pos, int *d_match_result, int *d_nnz_per_block ) ;
+__global__ void PFAC_reduce_kernel_device(
+    int *d_PFAC_table, 
+    int *d_input_string, 
+    int input_size, 
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
+    int *d_pos, 
+    int *d_match_result, 
+    int *d_nnz_per_block ) ;
 
 
-__host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle, 
-    int *d_input_string, int input_size,
-    int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
-    int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched );
+__host__  PFAC_status_t PFAC_reduce_kernel_stage1( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_blocks, 
+    dim3 dimBlock, 
+    dim3 dimGrid,
+    int *d_match_result, 
+    int *d_pos, 
+    int *d_nnz_per_block, 
+    int *h_num_matched );
 
-__global__ void zip_kernel(int *d_pos, int *d_match_result, int *d_nnz_per_block,
-     int num_blocks_minus1, int elements_per_block,
-     int *d_pos_zip, int *d_match_result_zip);
+__global__ void zip_kernel(
+     int *d_pos, 
+     int *d_match_result, 
+     int *d_nnz_per_block,
+     int num_blocks_minus1, 
+     int elements_per_block,
+     int *d_pos_zip, 
+     int *d_match_result_zip);
+
+/* end of declaration */
      
 // ---------------------------- main ----------------------    
 
@@ -146,8 +169,15 @@ __global__ void zip_kernel(int *d_pos, int *d_match_result, int *d_nnz_per_block
  *
  */ 
     
-__host__  PFAC_status_t PFAC_reduce_kernel( PFAC_handle_t handle, int *d_input_string, int input_size,
-    int *d_match_result, int *d_pos, int *h_num_matched, int *h_match_result, int *h_pos )
+__host__  PFAC_status_t PFAC_reduce_kernel( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int *d_match_result, 
+    int *d_pos, 
+    int *h_num_matched, 
+    int *h_match_result, 
+    int *h_pos )
 {
     int *d_nnz_per_block = NULL ;     // working space, d_nnz_per_block[j] = nnz of block j 
     int *d_pos_zip = NULL ;           // working space, compression of initial d_pos
@@ -250,7 +280,9 @@ __host__  PFAC_status_t PFAC_reduce_kernel( PFAC_handle_t handle, int *d_input_s
         cuda_status2 = cudaMemcpy(d_match_result, d_match_result_zip, (*h_num_matched)*sizeof(int), cudaMemcpyDeviceToDevice);
     }
     
-    if ( (cudaSuccess != cuda_status1) || (cudaSuccess != cuda_status2) ){
+    if ( (cudaSuccess != cuda_status1) || 
+         (cudaSuccess != cuda_status2) )
+    {
         cudaFree(d_pos_zip);
         cudaFree(d_match_result_zip);
         return PFAC_STATUS_INTERNAL_ERROR ;
@@ -271,38 +303,38 @@ __host__  PFAC_status_t PFAC_reduce_kernel( PFAC_handle_t handle, int *d_input_s
  *  since each thread block processes 1024 substrings, so range of d_nnz_per_block[j] is [0,1024] 
  */
 
-__host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle, 
-    int *d_input_string, int input_size,
-    int n_hat, int num_blocks, dim3 dimBlock, dim3 dimGrid,
-    int *d_match_result, int *d_pos, int *d_nnz_per_block, int *h_num_matched )
+__host__  PFAC_status_t PFAC_reduce_kernel_stage1( 
+    PFAC_handle_t handle, 
+    int *d_input_string, 
+    int input_size,
+    int n_hat, 
+    int num_blocks, 
+    dim3 dimBlock, 
+    dim3 dimGrid,
+    int *d_match_result, 
+    int *d_pos, 
+    int *d_nnz_per_block, 
+    int *h_num_matched )
 {
     cudaError_t cuda_status ;
-
+    PFAC_status_t pfac_status = PFAC_STATUS_SUCCESS;
+    
     int num_finalState = handle->numOfFinalStates;
     int initial_state  = handle->initial_state;
     bool smem_on = ((4*EXTRA_SIZE_PER_TB-1) >= handle->maxPatternLen) ;
     bool texture_on = (PFAC_TEXTURE_ON == handle->textureMode );
 
-#ifdef DEBUG_MSG
     if ( texture_on ){
-        printf("run PFAC_reduce_kernel (texture ON) \n");
-    }else{
-        printf("run PFAC_reduce_kernel (texture OFF) \n");
-    }
-
-    if (smem_on) {
-        printf("run PFAC_reduce_kernel (smem ON ), maxPatternLen = %d\n", handle->maxPatternLen);
-    }else{
-        printf("run PFAC_reduce_kernel (smem OFF), maxPatternLen = %d\n", handle->maxPatternLen);
-    }
-#endif
-
-    if ( texture_on ){
+    
+        // #### lock mutex, only one thread can bind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+    
         textureReference *texRefTable ;
         cudaGetTextureReference( (const struct textureReference**)&texRefTable, "tex_PFAC_table_reduce" );
-
         cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<int>();
-        
         // set texture parameters
         tex_PFAC_table_reduce.addressMode[0] = cudaAddressModeClamp;
         tex_PFAC_table_reduce.addressMode[1] = cudaAddressModeClamp;
@@ -312,16 +344,18 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle,
         size_t offset ;
         cuda_status = cudaBindTexture( &offset, (const struct textureReference*) texRefTable,
         (const void*) handle->d_PFAC_table, (const struct cudaChannelFormatDesc*) &channelDesc, handle->sizeOfTableInBytes ) ;
+        
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+
         if ( cudaSuccess != cuda_status ){
-#ifdef DEBUG_MSG
-            printf("Error: cannot bind texture, %s\n", cudaGetErrorString(status) );
-#endif
+            PFAC_PRINTF("Error: cannot bind texture, %s\n", cudaGetErrorString(cuda_status) );
             return PFAC_STATUS_CUDA_ALLOC_FAILED ;
         }
         if ( 0 != offset ){
-#ifdef DEBUG_MSG
-            printf("Error: offset is not zero\n");
-#endif
             return PFAC_STATUS_INTERNAL_ERROR ;
         }
     }
@@ -349,15 +383,25 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle,
     }
     
     cuda_status = cudaGetLastError() ;
-    if ( cudaSuccess != cuda_status ){
-        if ( texture_on ) { 
-            cudaUnbindTexture(tex_PFAC_table_reduce); 
-        }
-        return PFAC_STATUS_INTERNAL_ERROR ;
-    }
 
     if ( texture_on ){
+        // #### lock mutex, only one thread can unbind texture
+        pfac_status = PFAC_tex_mutex_lock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+    
         cudaUnbindTexture(tex_PFAC_table_reduce);
+        
+        // #### unlock mutex
+        pfac_status = PFAC_tex_mutex_unlock();
+        if ( PFAC_STATUS_SUCCESS != pfac_status ){
+            return pfac_status ;
+        }
+    }
+
+    if ( cudaSuccess != cuda_status ){
+        return PFAC_STATUS_INTERNAL_ERROR ;
     }
 
     /*
@@ -383,9 +427,14 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1( PFAC_handle_t handle,
 
 
 
-__global__ void zip_kernel(int *d_pos, int *d_match_result, int *d_nnz_per_block,
-     int num_blocks_minus1, int elements_per_block,
-     int *d_pos_zip, int *d_match_result_zip)
+__global__ void zip_kernel(
+     int *d_pos, 
+     int *d_match_result, 
+     int *d_nnz_per_block,
+     int num_blocks_minus1, 
+     int elements_per_block,
+     int *d_pos_zip, 
+     int *d_match_result_zip)
 {
     int tid   = threadIdx.x ;
     int gbid  = blockIdx.y * gridDim.x + blockIdx.x ;
@@ -588,9 +637,17 @@ inline __device__ int warpScanInclusive(int idata, int id, int *s_Data)
  */
 
 template <int TEXTURE_ON , int SMEM_ON >
-__global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string, 
-    int input_size, int n_hat, int num_finalState, int initial_state, int num_blocks_minus1,
-    int *d_pos, int *d_match_result, int *d_nnz_per_block )
+__global__ void PFAC_reduce_kernel_device(
+    int *d_PFAC_table, 
+    int *d_input_string, 
+    int input_size, 
+    int n_hat, 
+    int num_finalState, 
+    int initial_state, 
+    int num_blocks_minus1,
+    int *d_pos, 
+    int *d_match_result, 
+    int *d_nnz_per_block )
 {
     int tid   = threadIdx.x ;
     int gbid  = blockIdx.y * gridDim.x + blockIdx.x ;
@@ -646,7 +703,7 @@ __global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string
         if ( (start < n_hat) && (tid < EXTRA_SIZE_PER_TB) ){
             s_input[tid + NUM_INTS_PER_THREAD*BLOCK_SIZE] = d_input_string[start];
         }
-    }// if SMEM_ON
+    }
     
     __syncthreads();
 
@@ -810,7 +867,7 @@ __global__ void PFAC_reduce_kernel_device(int *d_PFAC_table, int *d_input_string
 }
 
 /*
-  technical note of PFAC_reduce_kernel_device:
+ ******************* technical note of PFAC_reduce_kernel_device:
 
 ----------------------------------------------------------------------------------------
   
