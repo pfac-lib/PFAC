@@ -1,0 +1,17 @@
+We adopt Thrust in our implementation. 
+
+Thrust is an open source library of parallel algorithms with an interface resembling the C++ Standard Template Library (STL).  The primary developers of Thrust are Jared Hoberock and Nathan Bell of NVIDIA Research. And contributors are  
+  * Andrew Corrigan
+  * Duane Merrill
+  * Erich Elsen
+  * Gregory Diamos
+  * Mark Harris
+  * Michael Garland
+  * Nadathur Satish
+  * Ryuta Suzuki
+  * Shubho Sengupta
+  * Thomas Bradley 
+
+Thrust can be downloaded from http://code.google.com/p/thrust/
+
+We include Thrust 1.3.0 in the root of the library, users don't need to download Thrust.

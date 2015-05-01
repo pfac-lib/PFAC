@@ -1,0 +1,161 @@
+------------------------------------------------------------------------------------------------------
+| PFAC Libray: GPU-based string matching algorithm                                                   |
+|                                                                                                    |
+| Chen-Hsiung Liu    National Tsing Hua University, Hsinchu, Taiwan       lgen7604@gmail.com         |
+| Lung-Sheng Chien   National Tsing Hua University, Hsinchu, Taiwan       lungshengchien@gmail.com   |
+| Cheng-Hung Lin     National Taiwan Normal University, Taipei, Taiwan    brucelinco@gmail.com       |   
+| Shih-Chieh Chang   National Tsing Hua University, Hsinchu, Taiwan       shihchiehchang@gmail.com   |                   
+|                                                                                                    |
+------------------------------------------------------------------------------------------------------ 
+
+see the file LICENSE for license information.
+see the file NOTICE for notice statement
+
+I.   Introduction
+II.  Directories and Files
+III. Installation 
+IV.  What you must know 
+
+Introduction
+------------
+PFAC is abbreviated from the Parallel Failureless Aho-Corasick algorithm proposed in [1]. 
+It is a variant of the well-known Aho-Corasick (AC) algorithm with all its failure transitions 
+removed as well as the self-loop transition of the initial state. The purpose of PFAC is to 
+match all longest patterns in a given input stream against patterns pre-defined by users
+
+PFAC library which is self-contained at API level utilizes the power of GPUs. An user needs not 
+know anything of GPU programming, all he has to do is to create a PFAC handle (PFAC_create()) 
+and to follow several APIs for loading patterns from file (PFAC_readPatternFromFile()), 
+preparing input stream on host memory (CPU side), and processing input stream by calling PFAC_matchFromHost(). 
+Finally PFAC would automatically transfer data to the device memory (GPU side), process and copy matched results 
+back to the host memory. 
+
+A detailed description of the algorithm used is available in the doc subdirectory (see doc/PFAC_algorithm.pdf)
+User guide is also available in the doc subdirectory (see doc/PFAC_userGuide.pdf)
+
+
+Directories
+-----------
+There are seven directories and several files in the main directory of this
+distribution, described below
+
+src      This contains the source code of the PFAC library.
+         It is mainly composed by two algorithms, one is non-reduced version
+         which is used in PFAC_matchFromDevice() and PFAC_matchFromHost() and 
+         the other is reduced version which is used in PFAC_matchFromDeviceReduce() 
+         and PFAC_matchFromHostReduce().  
+
+include  This directory contains the header files.
+         PFAC.h is a public header file, must be included in the application.
+         PFAC_P.h is a private header file, used in development.
+
+
+test     This directory contains five simple examples.
+         Please see appendix A of doc/PFAC_userGuide.pdf
+
+doc      This directory contains one paper (PFAC_algorithm.pdf) describing the algorithm 
+         and one user Guide (PFAC_userGuide.pdf).
+
+common.mk   specify compiler, compilation options and linker
+
+After compilation, 
+
+lib      This directory contains one static library libpfac.a and four dynamic module,
+         libpfac_sm11.so libpfac_sm12.so libpfac_sm13.so libpfac_sm20.so libpfac_sm21.so  
+
+obj      This directory contains object files during compilation
+
+bin      This directory contains five executable file corresponding to five example in 
+         test subdirectory. 
+
+
+Installation 
+---------
+Step 1: download the PFAC library from http://code.google.com/p/pfac/ 
+    tar xzvf PFAC.tar.gz
+
+    In order to simplify notation, we define PFAC_LIB_ROOT as the top directory of the PFAC library 
+    (For example, if the PFAC library is installed in directory /opt/PFAC, PFAC_LIB_ROOT=/opt/PFAC). 
+    PFAC adopts recursive make and default compiler is g++ which is specified in common.mk. 
+    If you want to use Intel C++ compiler or some 3rd party compiler, please edit common.mk, 
+    modify variable CC, CXX and LINK. Second, the PFAC library also uses OpenMP to run CPU version, 
+    so it is necessary to link with OpenMP-support library
+
+    Note 1: PFAC library uses g++ -fPIC to generate dynamic module.
+    Note 2: PFAC library uses Thrust to do prefix-sum, the Thurst is included in $( PFAC_LIB_ROOT)/include, 
+            one can download Thrust from http://code.google.com/p/thrust/
+ 
+Step 2: generate PFAC library by 
+    make
+
+    Then one static library (libpfac.a) and five dynamic modules (libpfac_sm11.so, libpfac_sm12.so, 
+    libpfac_sm13.so, libpfac_sm20.so, libpfac_sm21.so) will be generated in directory $(PFAC_LIB_ROOT)/lib. 
+
+    Note: sm1.0 is not supported and PFAC library does not test on sm1.2 and sm2.1
+
+Step 3: add $(PFAC_LIB_ROOT)/lib to LD_LIBRARY_PATH environment variable 
+
+    Example: add following two lines in $(HOME)/.bash_profile 
+        LD_LIBRARY_PATH=$(PFAC_LIB_ROOT)/lib:$LD_LIBRARY_PATH
+        export LD_LIBRARY_PATH
+
+    Note: PFAC library will load proper dynamic module at runtime. If $(PFAC_LIB_ROOT)/lib is not set in LD_LIBRARY_PATH, 
+    the PFAC library cannot find dynamic module, and report error code PFAC_STATUS_LIB_NOT_EXIST.
+
+Step 4: verify PFAC library
+      cd bin
+      ./ simple_example.exe
+
+      If no error occurs, then PFAC library works.
+
+Step 5: how to link PFAC library
+    $(PFAC_LIB_ROOT)/include/PFAC.h is a public header file, programmers must include this header file in the C/C++ source code. 
+    To compile the source codes, you must inform C/C++ compiler where PFAC.h locates by option -I$(PFAC_LIB_ROOT)/include. 
+    To link the object codes, you must provide static library $(PFAC_LIB_ROOT)/lib/libpfac.a by option -L$(PFAC_LIB_ROOT)/lib -lpfac. 
+    Moreover you need to link with OpenMP-support library (option -fopenmp is enough for g++ and option -openmp is for Intel C++ compiler). 
+
+    For example:
+        g++ -fopenmp -I$(PFAC_LIB_ROOT)/include -L$(PFAC_LIB_ROOT)/lib -lpfac [your source code]
+    or
+        icpc -openmp -I$(PFAC_LIB_ROOT)/include -L$(PFAC_LIB_ROOT)/lib -lpfac [your source code]
+
+
+What you must know 
+-----------
+1. PFAC library provides C-style API. Programmers can link the library to C/C++ code or other language.
+
+2. PFAC library uses 32-bit atomic operation which does not support compute capability 1.0 (sm1.0)
+    
+3. PFAC library is optimized on Fermi (mainly sm2.0) and is functional correct on sm1.1, sm1.2, and sm1.3 but may not perform better on sm1.x.
+
+4. PFAC library does not test on sm1.2 and sm2.1.
+
+5. PFAC library accepts patterns of any length but performs better if length of pattern is smaller than 512. 
+
+6. PFAC context binds to only one GPU context and only default stream is used in PFAC library. 
+   Programmers can bind multiple PFAC contexts to multiple GPU by OpenMP library or pThread library, 
+   please see OpenMP example in $(PFAC_LIB_ROOT)/test/omp_PFAC.cpp or pThread example in $(PFAC_LIB_ROOT)/test/SimpleMultiGPU_pthread.cpp
+
+7. programmers must always check error code returned by API because PFAC library does not record last error. 
+   If returned error code is not PFAC_STATUS_SUCCESS, then decode error code by helper function PFAC_getErrorString(). 
+   Basic procedure is as following
+   
+    #include <PFAC.h>
+    ...
+    PFAC_handle_t handle ;
+    PFAC_status_t PFAC_status ;
+   
+    PFAC_status = PFAC_create( &handle );
+   
+    if ( PFAC_STATUS_SUCCESS != PFAC_status ){
+        printf("Error: %s\n", PFAC_getErrorString(PFAC_status));
+        exit(1);  
+    }
+   
+   [/code]
+
+
+Reference
+[1] Cheng-Hung Lin, Chen-Hsiung Liu, Lung-Sheng Chien, and Shih-Chieh Chang, 
+    "Accelerating Pattern Matching Using a Novel Parallel Algorithm on GPU," preprint. 
+    You can find it in directory $(PFAC_LIB_ROOT)/doc.
