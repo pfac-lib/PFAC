@@ -26,7 +26,7 @@ ABEDEDABG
 ```
 
 The following example shows the basic steps to use PFAC library for string matching.
-```
+```cpp
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -121,7 +121,7 @@ At position    6, match pattern 2
 
 ## Example 2: Using PFAC_matchFromDevice function
 Prepare the same input file and pattern file. The screen shows the same matched results as  example 1.
-```
+```cpp
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
