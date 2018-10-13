@@ -36,49 +36,28 @@ CPP_SRC += PFAC.cpp
 
 inc_files = $(INC_DIR)/PFAC_P.h  $(INC_DIR)/PFAC.h
 
-CU_OBJ = $(patsubst %.cu,%.o,$(CU_SRC))
+CU_CPP = $(patsubst %.cu,%.cu.cpp,$(CU_SRC)) 
 
-CU_CPP = $(patsubst %.cu,%.cu.cpp,$(CU_SRC))
+CPP_OBJ = $(patsubst %.cpp,%.o,$(CPP_SRC)) 
 
-CPP_OBJ = $(patsubst %.cpp,%.o,$(CPP_SRC))
+cu_cpp_obj_loc = $(patsubst %.cpp,$(OBJ_DIR)/$(sm)_%.cpp.o,$(CU_CPP))
 
 cppobj_loc = $(patsubst %.o,$(OBJ_DIR)/%.o,$(CPP_OBJ))
 
 cppobj_fpic_loc = $(patsubst %.o,$(OBJ_DIR)/%_fpic.o,$(CPP_OBJ))
 
+all:  mk_libso_sm mk_lib_fpic
 
-cu_cpp_sm20_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm20_%.cpp,$(CU_CPP))
-cu_cpp_sm13_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm13_%.cpp,$(CU_CPP))
-cu_cpp_sm12_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm12_%.cpp,$(CU_CPP))
-cu_cpp_sm11_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm11_%.cpp,$(CU_CPP))
+mk_libso_sm:
+	$(foreach sm, $(sm_support), $(info Compiling to $(sm)) $(cu_cpp) $(cu_cpp_link))
 
-cu_cpp_obj_sm30_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm30_%.cpp.o,$(CU_CPP))
-cu_cpp_obj_sm21_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp.o,$(CU_CPP))
-cu_cpp_obj_sm20_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm20_%.cpp.o,$(CU_CPP))
-cu_cpp_obj_sm13_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm13_%.cpp.o,$(CU_CPP))
-cu_cpp_obj_sm12_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm12_%.cpp.o,$(CU_CPP))
-cu_cpp_obj_sm11_loc = $(patsubst %.cpp,$(OBJ_DIR)/sm11_%.cpp.o,$(CU_CPP))
+cu_cpp = $(foreach file, $(CU_SRC), $(cu_cpp_file))
 
-all: mk_libso_no21 mk_libso_21 mk_libso_30  mk_lib_fpic 
+cu_cpp_file = $(shell $(NVCC) -arch=sm_30 -cuda $(INCPATH) -o $(OBJ_DIR)/$(sm)_$(file).cpp $(file) && \
+		$(CXX) -fPIC -O2 -c -o $(OBJ_DIR)/$(sm)_$(file).cpp.o $(OBJ_DIR)/$(sm)_$(file).cpp \
+)
 
-sm30_command := $(if $(sm_30_support),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm30.so $(LIBS) $(cu_cpp_obj_sm30_loc),)
-sm21_command := $(if $(sm_21_support),$(CXX) -shared -o $(LIB_DIR)/libpfac_sm21.so $(LIBS) $(cu_cpp_obj_sm21_loc),)
-
-cu_cpp_sm30_loc := $(if $(sm_30_support),$(patsubst %.cpp,$(OBJ_DIR)/sm30_%.cpp,$(CU_CPP)),)
-cu_cpp_sm21_loc := $(if $(sm_21_support),$(patsubst %.cpp,$(OBJ_DIR)/sm21_%.cpp,$(CU_CPP)),)
-
-
-mk_libso_no21: $(cu_cpp_sm20_loc) $(cu_cpp_sm13_loc) $(cu_cpp_sm12_loc) $(cu_cpp_sm11_loc)
-	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm20.so $(LIBS) $(cu_cpp_obj_sm20_loc)
-	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm13.so $(LIBS) $(cu_cpp_obj_sm13_loc)
-	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm12.so $(LIBS) $(cu_cpp_obj_sm12_loc)
-	$(CXX) -shared -o $(LIB_DIR)/libpfac_sm11.so $(LIBS) $(cu_cpp_obj_sm11_loc)
-
-mk_libso_30: $(cu_cpp_sm30_loc)
-	$(sm30_command)  
-
-mk_libso_21: $(cu_cpp_sm21_loc)
-	$(sm21_command)  
+cu_cpp_link = $(shell $(CXX) -shared -o $(LIB_DIR)/libpfac_$(sm).so $(LIBS) $(cu_cpp_obj_loc))
 
 mk_liba: $(cppobj_loc)
 	ar cru $(LIB_DIR)/libpfac.a  $(cppobj_loc)
@@ -99,37 +78,6 @@ $(OBJ_DIR)/PFAC_CPU_OMP_reorder.o: PFAC_CPU_OMP_reorder.cpp  $(inc_files)
 
 $(OBJ_DIR)/%.o: %.cpp  $(inc_files)
 	$(CXX) -c $(CXXFLAGS) $(INCPATH) -o $@ $<
-
-
-$(OBJ_DIR)/sm30_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_30 -cuda $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-$(OBJ_DIR)/sm21_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_21 -cuda $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-$(OBJ_DIR)/sm20_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_20 -cuda $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-$(OBJ_DIR)/sm13_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_13 -cuda  $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-$(OBJ_DIR)/sm12_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_12 -cuda  $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-$(OBJ_DIR)/sm11_%.cu.cpp: %.cu
-	$(NVCC) -arch=sm_11 -cuda  $(INCPATH) -o $@ $<
-	$(CXX) -fPIC -O2 -c -o $@.o $@
-
-#clean :
-#	rm -f *.linkinfo
-#	rm -f $(OBJ_DIR)/*
-#	rm -f $(EXE_DIR)/*
-
 
 ####### Implicit rules
 
