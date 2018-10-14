@@ -668,7 +668,7 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1(
 
         // (1) bind texture to tex_tableOfInitialState
         textureReference *texRefTableOfInitialState ;
-        cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, "tex_tableOfInitialState_reduce" );
+        cudaGetTextureReference( (const struct textureReference**)&texRefTableOfInitialState, &tex_tableOfInitialState_reduce );
         cudaChannelFormatDesc channelDesc_tableOfInitialState = cudaCreateChannelDesc<int>();
         // set texture parameters
         tex_tableOfInitialState_reduce.addressMode[0] = cudaAddressModeClamp;
@@ -682,7 +682,7 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1(
 
         // (2) bind texture to tex_hashRowPtr
         textureReference *texRefHashRowPtr ;
-        cudaGetTextureReference( (const struct textureReference**)&texRefHashRowPtr, "tex_hashRowPtr_reduce" );
+        cudaGetTextureReference( (const struct textureReference**)&texRefHashRowPtr, &tex_hashRowPtr_reduce );
         cudaChannelFormatDesc channelDesc_hashRowPtr = cudaCreateChannelDesc<int2>();
         // set texture parameters
         tex_hashRowPtr_reduce.addressMode[0] = cudaAddressModeClamp;
@@ -696,7 +696,7 @@ __host__  PFAC_status_t PFAC_reduce_space_driven_stage1(
     
         // (3) bind texture to tex_hashValPtr
         textureReference *texRefHashValPtr ;
-        cudaGetTextureReference( (const struct textureReference**)&texRefHashValPtr, "tex_hashValPtr_reduce" );
+        cudaGetTextureReference( (const struct textureReference**)&texRefHashValPtr, &tex_hashValPtr_reduce );
         cudaChannelFormatDesc channelDesc_hashValPtr = cudaCreateChannelDesc<int2>();
         // set texture parameters
         tex_hashValPtr_reduce.addressMode[0] = cudaAddressModeClamp;

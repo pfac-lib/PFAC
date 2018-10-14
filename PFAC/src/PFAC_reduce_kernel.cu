@@ -333,7 +333,7 @@ __host__  PFAC_status_t PFAC_reduce_kernel_stage1(
         }
     
         textureReference *texRefTable ;
-        cudaGetTextureReference( (const struct textureReference**)&texRefTable, "tex_PFAC_table_reduce" );
+        cudaGetTextureReference( (const struct textureReference**)&texRefTable, &tex_PFAC_table_reduce );
         cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<int>();
         // set texture parameters
         tex_PFAC_table_reduce.addressMode[0] = cudaAddressModeClamp;
