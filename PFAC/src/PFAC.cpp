@@ -156,21 +156,11 @@ PFAC_status_t  PFAC_create( PFAC_handle_t *handle )
     PFAC_PRINTF("major = %d, minor = %d, name=%s\n", deviceProp.major, deviceProp.minor, deviceProp.name );
 
     int device_no = 10*deviceProp.major + deviceProp.minor ;
-    if ( 30 == device_no ){
-        strcpy (modulepath, "libpfac_sm30.so");    
-    }else if ( 21 == device_no ){
-        strcpy (modulepath, "libpfac_sm21.so");    
-    }else if ( 20 == device_no ){
-        strcpy (modulepath, "libpfac_sm20.so");
-    }else if ( 13 == device_no ){
-        strcpy (modulepath, "libpfac_sm13.so");
-    }else if ( 12 == device_no ){
-        strcpy (modulepath, "libpfac_sm12.so");
-    }else if ( 11 == device_no ){
-        strcpy (modulepath, "libpfac_sm11.so");
-    }else{
-        return PFAC_STATUS_ARCH_MISMATCH ;
-    }
+    strcpy (modulepath, "libpfac_sm_");
+    char stringnumber[5];
+    sprintf(stringnumber, "%d", device_no);
+    strcat (modulepath, stringnumber);
+    strcat (modulepath, ".so");
     
     (*handle)->device_no = device_no ;
     

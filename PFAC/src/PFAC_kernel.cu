@@ -120,7 +120,7 @@ __host__  PFAC_status_t  PFAC_kernel_timeDriven_warpper(
         } 
 
         textureReference *texRefTable ;
-        cudaGetTextureReference( (const struct textureReference**)&texRefTable, "tex_PFAC_table" );
+        cuda_status = cudaGetTextureReference( (const struct textureReference**)&texRefTable, &tex_PFAC_table );
         cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<int>();
         // set texture parameters
         tex_PFAC_table.addressMode[0] = cudaAddressModeClamp;
