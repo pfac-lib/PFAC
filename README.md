@@ -1,5 +1,5 @@
 # What is PFAC?
-*PFAC* is an open library for exact string matching performed on *GPUs*. PFAC runs on processors that support *CUDA*, including NVIDIA 1.1, 1.2, 1.3, 2.0 and 2.1 architectures. Supporting OS includes ubuntu, Fedora and MAC OS.
+*PFAC* is an open library for exact string matching performed on *GPUs*. PFAC runs on processors that support *CUDA*. Supporting OS includes ubuntu, Fedora and MAC OS.
 
 PFAC library provides C-style API and users need not have background on GPU computing or parallel computing. PFAC has APIs hiding CUDA stuff. 
 
