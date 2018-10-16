@@ -53,7 +53,7 @@ mk_libso_sm:
 
 cu_cpp = $(foreach file, $(CU_SRC), $(cu_cpp_file))
 
-cu_cpp_file = $(shell $(NVCC) -arch=sm_30 -cuda $(INCPATH) -o $(OBJ_DIR)/$(sm)_$(file).cpp $(file) && \
+cu_cpp_file = $(shell $(NVCC) -arch=$(sm) -cuda $(INCPATH) -o $(OBJ_DIR)/$(sm)_$(file).cpp $(file) && \
 		$(CXX) -fPIC -O2 -c -o $(OBJ_DIR)/$(sm)_$(file).cpp.o $(OBJ_DIR)/$(sm)_$(file).cpp \
 )
 
